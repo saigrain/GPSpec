@@ -2,6 +2,7 @@ import numpy as np
 import pylab as pl
 import glob
 import george, emcee, corner
+from time import time as clock
 
 SPEED_OF_LIGHT = 2.99796458e8
 
@@ -141,6 +142,8 @@ for i in np.arange(nfl):
 # flux = flux[:,250:750]
 # err = err[:,250:750]
 
+t0 = clock()
+
 a0 = 0.19
 r0 = 0.24
 kernel = a0**2 * george.kernels.Matern32Kernel(r0**2)
@@ -152,7 +155,6 @@ lwav_shift = np.copy(lwav_corr)
 wav_shift = np.copy(wav_corr)
 
 def lnprob2(p):
-    print p
     npar = len(p)
     sigma_prior = 100.0
     lnprior = -0.5 * npar * np.log(2*np.pi) \
@@ -167,15 +169,15 @@ def lnprob2(p):
     e = err.flatten()
     gp.compute(x, yerr = e, sort = True)
     lnlike = gp.lnlikelihood(y, quiet = True)
-    print lnprior, lnlike
     return lnprior + lnlike
     
-nwalkers, ndim = 36, nfl-1
+nwalkers, ndim = 32, nfl-1
 p0 = [np.zeros(ndim) + np.random.randn(ndim) for i in range(nwalkers)]
-sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2)
+sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2, threads=8)
 
-print 'running MCMC on velocities'
+print 'running MCMC on velocities: burn in...'
 p0, _, _ = sampler.run_mcmc(p0, 100)
+print 'production run...'
 p0, _, _ = sampler.run_mcmc(p0, 500)
 samples = sampler.chain
 
@@ -185,10 +187,12 @@ for i in range(ndim):
     pl.subplot(ndim, 1, i+1)
     for j in range(nwalkers):
         pl.plot(samples[j,:,i], 'k-', alpha=0.3)
+pl.savefig('../plots/rollsRoyce_chain.png')
 
 # corner plot
 samples = samples.reshape(-1,ndim)
 corner.corner(samples, show_titles=True, title_args={"fontsize": 12})
+pl.savefig('../plots/rollsRoyce_triangle.png')
 
 # print 16, 50 and 84 percentile values
 vals = map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), \
@@ -226,3 +230,7 @@ pl.plot(x, y-mu, 'k.')
 pl.plot(x, mu-mu, 'k-')
 pl.fill_between(x, 2 * mu_err, - 2 * mu_err, color = 'k', \
                 alpha = 0.4)
+pl.savefig('../plots/rollsRoyce_spec.png')
+
+t1 = clock()
+print 'Time taken %d sec' % (t1-t0)
