@@ -21,8 +21,8 @@ err = d['error']
 # work on subset only for now #
 ###############################
 print 'Selecting subset'
-# ifl = np.array([0,3,7,10,14,17,21,24,28,32])
-ifl = np.arange(35).astype(int)
+ifl = np.array([0,7,14,21,28])
+# ifl = np.arange(35).astype(int)
 nfl = len(ifl)
 wav = wav[ifl,:]
 flux = flux[ifl,:]
@@ -137,11 +137,13 @@ def lnprob2(p):
         x.append(np.exp(lws) * 1e10)
         y.append(flux[i,inline[i,:]])
         e.append(err[i,inline[i,:]])
-    x = np.array(x)
+    x = np.array([item for sublist in x for item in sublist])
+    y = np.array([item for sublist in y for item in sublist])
+    e = np.array([item for sublist in e for item in sublist])
     s = np.argsort(x)
     x = x[s]
-    y = np.array(y)[s]
-    e = np.array(e)[s]
+    y = y[s]
+    e = e[s]
     lnlike = 0
     for iseg in range(nseg):
         if iseg == nseg-1:
@@ -155,8 +157,8 @@ def lnprob2(p):
         gp.compute(xx, yerr = ee)
         lnlike += gp.lnlikelihood(yy, quiet = True)
     return lnprior + lnlike
-    
-nwalkers, ndim = 100, nfl-1
+
+nwalkers, ndim = 32, nfl-1
 p0 = [np.zeros(ndim) + 10.0 * np.random.randn(ndim) for i in range(nwalkers)]
 sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2, threads=8)
 
@@ -208,11 +210,13 @@ for i in range(nfl):
     x.append(np.exp(lws) * 1e10)
     y.append(flux[i,inline[i,:]])
     e.append(err[i,inline[i,:]])
-x = np.array(x)
+x = np.array([item for sublist in x for item in sublist])
+y = np.array([item for sublist in y for item in sublist])
+e = np.array([item for sublist in e for item in sublist])
 s = np.argsort(x)
 x = x[s]
-y = np.array(y)[s]
-e = np.array(e)[s]
+y = y[s]
+e = e[s]
 gp.compute(x, yerr = e)
 wav_mu = np.r_[wav.min():wav.max():1001j]
 mu, cov = gp.predict(y, wav_mu)
