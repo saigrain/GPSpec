@@ -101,165 +101,119 @@ else:
             l = l[:nperbin]
             sel[i,l] = True
         
-# #####################
-# # Rolls Royce model #
-# #####################
-# inline = np.zeros(flux.shape, 'bool')
-# thresh = 0.9
-# for i in range(nfl):
-#     inline[i,:] = flux[i,:] < thresh
-#     print inline[i,:].sum()
+#####################
+# Rolls Royce model #
+#####################
 
-# t0 = clock()
+t0 = clock()
 
-# a0 = 0.19
-# r0 = 0.24
-# kernel = a0**2 * george.kernels.Matern32Kernel(r0**2)
-# gp = george.GP(kernel, mean = 1.0, solver = george.hodlr.HODLRSolver)
-# print kernel.pars
-# print np.sqrt(kernel.pars)
+a0 = 0.71
+r0 = 17.0
+kernel = a0**2 * george.kernels.Matern52Kernel(r0**2)
+gp = george.GP(kernel, mean = 1.0)
 
-# lwav_shift = np.copy(lwav_corr)
-# wav_shift = np.copy(wav_corr)
+lwav_shift = np.copy(lwav_corr)
+wav_shift = np.copy(wav_corr)
 
-# ndat = inline.sum()
-# nseg = 1
-# n = ndat/nseg
-# while (ndat/nseg) > nmax:
-#     nseg += 1
-# n = ndat/nseg
-# print nseg, n
-
-# def lnprob2(p):
-#     npar = len(p)
-#     sigma_prior = 100.0
-#     lnprior = -0.5 * npar * np.log(2*np.pi) \
-#       - 0.5 * npar * np.log(sigma_prior) \
-#       - (p**2/2./sigma_prior**2).sum()
-#     pp = np.append(p, -p.sum())
-#     dlw = pp / SPEED_OF_LIGHT
-#     for i in range(npar+1):
-#         lwav_shift[i] = lwav_corr[i,:] + dlw[i]
-#         wav_shift[i] = np.exp(lwav_shift[i]) * 1e10
-#     x = wav_shift[inline].flatten()
-#     y = flux[inline].flatten()
-#     e = err[inline].flatten()
-#     s = np.argsort(x)
-#     x = x[s]
-#     y = y[s]
-#     e = e[s]
-#     lnlike = 0
-#     for iseg in range(nseg):
-#         if iseg == nseg-1:
-#             xx = x[iseg*n:]
-#             yy = y[iseg*n:]
-#             ee = e[iseg*n:]
-#         else:
-#             xx = x[iseg*n:(iseg+1)*n]
-#             yy = y[iseg*n:(iseg+1)*n]
-#             ee = e[iseg*n:(iseg+1)*n]
-#         gp.compute(xx, yerr = ee)
-#         lnlike += gp.lnlikelihood(yy, quiet = True)
-#     return lnprior + lnlike
+def lnprob2(p):
+    npar = len(p)
+    sigma_prior = 100.0
+    lnprior = -0.5 * npar * np.log(2*np.pi) \
+      - 0.5 * npar * np.log(sigma_prior) \
+      - (p**2/2./sigma_prior**2).sum()
+    pp = np.append(p, -p.sum())
+    dlw = pp / SPEED_OF_LIGHT
+    x = []
+    y = []
+    e = []
+    for i in range(npar+1):
+        lws = lwav_corr[i,sel[i,:]] + dlw[i]
+        x.append(np.exp(lws) * 1e10)
+        y.append(flux[i,sel[i,:]])
+        e.append(err[i,sel[i,:]])
+    x = np.array([item for sublist in x for item in sublist])
+    y = np.array([item for sublist in y for item in sublist])
+    e = np.array([item for sublist in e for item in sublist])
+    s = np.argsort(x)
+    x = x[s]
+    y = y[s]
+    e = e[s]
+    gp.compute(x, yerr = e)
+    lnlike = gp.lnlikelihood(y, quiet = True)
+    return lnprior + lnlike
     
-# nwalkers, ndim = 100, nfl-1
-# p0 = [np.zeros(ndim) + 10.0 * np.random.randn(ndim) for i in range(nwalkers)]
-# sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2, threads=8)
+nwalkers, ndim = 32, nfl-1
+p0 = [np.zeros(ndim) + 10.0 * np.random.randn(ndim) for i in range(nwalkers)]
+sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2, threads=4)
 
-# print 'running MCMC on velocities: burn in...'
-# nburn = 100
-# nstep = 500
-# p0, _, _ = sampler.run_mcmc(p0, nburn)
-# print 'production run...'
-# p0, _, _ = sampler.run_mcmc(p0, nstep)
-# samp = sampler.chain
-# samples = np.zeros((nwalkers,nstep,ndim+1))
-# samples[:,:,:ndim] = samp[:,nburn:,:]
-# for i in range(nwalkers):
-#     for j in range(nstep):
-#         samples[i,j,-1] = samp[i,nburn+j,:].sum()
+print 'running MCMC on velocities: burn in...'
+nburn = 100
+nstep = 500
+p0, _, _ = sampler.run_mcmc(p0, nburn)
+print 'production run...'
+p0, _, _ = sampler.run_mcmc(p0, nstep)
+samp = sampler.chain
+samples = np.zeros((nwalkers,nstep,ndim+1))
+samples[:,:,:ndim] = samp[:,nburn:,:]
+for i in range(nwalkers):
+    for j in range(nstep):
+        samples[i,j,-1] = samp[i,nburn+j,:].sum()
 
-# # plot chain 
-# pl.figure(figsize = (6,(ndim+1)/2.))
-# for i in range(ndim+1):
-#     pl.subplot(ndim+1, 1, i+1)
-#     for j in range(nwalkers):
-#         pl.plot(samples[j,:,i], 'k-', alpha=0.3)
-# pl.savefig('../plots/rollsRoyce_synth_chain.png')
+# plot chain 
+pl.figure(figsize = (6,ndim+1))
+for i in range(ndim+1):
+    pl.subplot(ndim+1, 1, i+1)
+    for j in range(nwalkers):
+        pl.plot(samples[j,:,i], 'k-', alpha=0.3)
+pl.savefig('../plots/rollsRoyce_synth_chain.png')
 
-# # corner plot
-# samples = samples.reshape(-1,ndim+1)
-# corner.corner(samples, show_titles=True, title_args={"fontsize": 12})
-# pl.savefig('../plots/rollsRoyce_synth_triangle.png')
+# corner plot
+samples = samples.reshape(-1,ndim+1)
+corner.corner(samples, show_titles=True, title_args={"fontsize": 12})
+pl.savefig('../plots/rollsRoyce_synth_triangle.png')
 
-# # print 16, 50 and 84 percentile values
-# vals = map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), \
-#            zip(*np.percentile(samples, [16, 50, 84], axis=0)))
-# p = np.zeros(ndim+1)
-# for i in range(ndim+1):
-#     print 'delta v(%d-0) = %.3f + %.3f -%.3f' % \
-#       (i+1, vals[i][0],vals[i][1],vals[i][2])
-#     p[i] = vals[i][0]
+# print 16, 50 and 84 percentile values
+vals = map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), \
+           zip(*np.percentile(samples, [16, 50, 84], axis=0)))
+p = np.zeros(ndim+1)
+for i in range(ndim+1):
+    print 'delta v(%d-0) = %.3f + %.3f -%.3f' % \
+      (i+1, vals[i][0],vals[i][1],vals[i][2])
+    p[i] = vals[i][0]
 
-# t1 = clock()
-# print 'Time taken %d sec' % (t1-t0)
+t1 = clock()
+print 'Time taken %d sec' % (t1-t0)
 
-# # final shift and plot:
-# dlw = p / SPEED_OF_LIGHT
-# for i in range(len(p)):
-#     lwav_shift[i,:] = lwav_corr[i,:] + dlw[i]
-#     wav_shift[i,:] = np.exp(lwav_shift[i]) * 1e10
-# x = wav_shift.flatten()
-# y = flux.flatten()
-# e = err.flatten()
-# s = np.argsort(x)
-# x = x[s]
-# y = y[s]
-# e = e[s]
+# final shift and plot:
+dlw = p / SPEED_OF_LIGHT
+x = []
+y = []
+e = []
+for i in range(nfl):
+    lws = lwav_corr[i,sel[i,:]] + dlw[i]
+    x.append(np.exp(lws) * 1e10)
+    y.append(flux[i,sel[i,:]])
+    e.append(err[i,sel[i,:]])
+x = np.array([item for sublist in x for item in sublist])
+y = np.array([item for sublist in y for item in sublist])
+e = np.array([item for sublist in e for item in sublist])
+s = np.argsort(x)
+x = x[s]
+y = y[s]
+e = e[s]
+gp.compute(x, yerr = e)
+wav_mu = np.r_[wav.min():wav.max():1001j]
+mu, cov = gp.predict(y, wav_mu)
+mu_err = np.sqrt(np.diag(cov))
 
-# ndat = inline.sum()
-# nseg = 1
-# n = ndat/nseg
-# while (ndat/nseg) > nmax:
-#     nseg += 1
-# n = ndat/nseg
-# print nseg, n
+pl.figure()
+pl.plot(wav_shift.T, flux.T, '.')
+pl.plot(wav_shift[inline].flatten(), flux[inline].flatten(), \
+        'o', c = 'none', mec = 'k')
+pl.plot(wav_mu, mu, 'k-')
+pl.fill_between(wav_mu, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
+                alpha = 0.4)
+pl.savefig('../plots/rollsRoyce_synth_spec.png')
 
-# mu = np.zeros(len(x)) + np.nan
-# mu_err = np.zeros(len(x)) + np.nan
-# for iseg in range(nseg):
-#     if iseg == nseg-1:
-#         xx = x[iseg*n:]
-#         yy = y[iseg*n:]
-#         ee = e[iseg*n:]
-#     else:
-#         xx = x[iseg*n:(iseg+1)*n]
-#         yy = y[iseg*n:(iseg+1)*n]
-#         ee = e[iseg*n:(iseg+1)*n]
-#         gp.compute(xx, yerr = ee)
-#     gp.compute(xx, yerr = ee, sort = True)
-#     m, c = gp.predict(yy, xx)
-#     me = np.sqrt(np.diag(c))
-#     if iseg == nseg-1:
-#         mu[iseg*n:] = m
-#         mu_err[iseg*n:] = me
-#     else:
-#         mu[iseg*n:(iseg+1)*n] = m
-#         mu_err[iseg*n:(iseg+1)*n] = me
-
-# pl.figure()
-# ax1=pl.subplot(211)
-# pl.plot(wav_shift.T, flux.T, '.')
-# pl.plot(x, mu, 'k-')
-# pl.fill_between(x, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
-#                 alpha = 0.4)
-# pl.axhline(thresh, ls = '--', color = 'k')
-# pl.subplot(212,sharex=ax1)
-# pl.plot(x, y-mu, 'k.')
-# pl.plot(x, mu-mu, 'k-')
-# pl.fill_between(x, 2 * mu_err, - 2 * mu_err, color = 'k', \
-#                 alpha = 0.4)
-# pl.savefig('../plots/rollsRoyce_synth_spec.png')
-
-# t1 = clock()
-# print 'Time taken %d sec' % (t1-t0)
+t2 = clock()
+print 'Time taken %d sec' % (t2-t1)
