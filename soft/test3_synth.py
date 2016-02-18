@@ -129,16 +129,19 @@ def lnprob2(p):
       - (p**2/2./sigma_prior**2).sum()
     pp = np.append(p, -p.sum())
     dlw = pp / SPEED_OF_LIGHT
+    x = []
+    y = []
+    e = []
     for i in range(npar+1):
-        lwav_shift[i] = lwav_corr[i,:] + dlw[i]
-        wav_shift[i] = np.exp(lwav_shift[i]) * 1e10
-    x = wav_shift[inline].flatten()
-    y = flux[inline].flatten()
-    e = err[inline].flatten()
+        lws = lwav_corr[i,inline[i,:]] + dlw[i]
+        x.append(np.exp(lws) * 1e10)
+        y.append(flux[i,inline[i,:]])
+        e.append(err[i,inline[i,:]])
+    x = np.array(x)
     s = np.argsort(x)
     x = x[s]
-    y = y[s]
-    e = e[s]
+    y = np.array(y)[s]
+    e = np.array(e)[s]
     lnlike = 0
     for iseg in range(nseg):
         if iseg == nseg-1:
@@ -197,60 +200,32 @@ print 'Time taken %d sec' % (t1-t0)
 
 # final shift and plot:
 dlw = p / SPEED_OF_LIGHT
-for i in range(len(p)):
-    lwav_shift[i,:] = lwav_corr[i,:] + dlw[i]
-    wav_shift[i,:] = np.exp(lwav_shift[i]) * 1e10
-x = wav_shift.flatten()
-y = flux.flatten()
-e = err.flatten()
+x = []
+y = []
+e = []
+for i in range(nfl):
+    lws = lwav_corr[i,inline[i,:]] + dlw[i]
+    x.append(np.exp(lws) * 1e10)
+    y.append(flux[i,inline[i,:]])
+    e.append(err[i,inline[i,:]])
+x = np.array(x)
 s = np.argsort(x)
 x = x[s]
-y = y[s]
-e = e[s]
-
-ndat = inline.sum()
-nseg = 1
-n = ndat/nseg
-while (ndat/nseg) > nmax:
-    nseg += 1
-n = ndat/nseg
-print nseg, n
-
-mu = np.zeros(len(x)) + np.nan
-mu_err = np.zeros(len(x)) + np.nan
-for iseg in range(nseg):
-    if iseg == nseg-1:
-        xx = x[iseg*n:]
-        yy = y[iseg*n:]
-        ee = e[iseg*n:]
-    else:
-        xx = x[iseg*n:(iseg+1)*n]
-        yy = y[iseg*n:(iseg+1)*n]
-        ee = e[iseg*n:(iseg+1)*n]
-        gp.compute(xx, yerr = ee)
-    gp.compute(xx, yerr = ee, sort = True)
-    m, c = gp.predict(yy, xx)
-    me = np.sqrt(np.diag(c))
-    if iseg == nseg-1:
-        mu[iseg*n:] = m
-        mu_err[iseg*n:] = me
-    else:
-        mu[iseg*n:(iseg+1)*n] = m
-        mu_err[iseg*n:(iseg+1)*n] = me
+y = np.array(y)[s]
+e = np.array(e)[s]
+gp.compute(x, yerr = e)
+wav_mu = np.r_[wav.min():wav.max():1001j]
+mu, cov = gp.predict(y, wav_mu)
+mu_err = np.sqrt(np.diag(cov))
 
 pl.figure()
-ax1=pl.subplot(211)
 pl.plot(wav_shift.T, flux.T, '.')
-pl.plot(x, mu, 'k-')
-pl.fill_between(x, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
-                alpha = 0.4)
-pl.axhline(thresh, ls = '--', color = 'k')
-pl.subplot(212,sharex=ax1)
-pl.plot(x, y-mu, 'k.')
-pl.plot(x, mu-mu, 'k-')
-pl.fill_between(x, 2 * mu_err, - 2 * mu_err, color = 'k', \
+pl.plot(wav_shift[inline].flatten(), flux[inline].flatten(), \
+        'o', c = 'none', mec = 'k')
+pl.plot(wav_mu, mu, 'k-')
+pl.fill_between(wav_mu, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
                 alpha = 0.4)
 pl.savefig('../plots/rollsRoyce_synth_spec.png')
 
-t1 = clock()
-print 'Time taken %d sec' % (t1-t0)
+t2 = clock()
+print 'Time taken %d sec' % (t2-t1)
