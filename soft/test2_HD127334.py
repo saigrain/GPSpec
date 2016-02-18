@@ -51,11 +51,11 @@ flux = flux[ifl,:]
 blaze = blaze[ifl,:]
 baryvel = baryvel[ifl]
 bjd = bjd[ifl]
-ipix = np.r_[1000:2000].astype(int)
-npix = len(ipix)
-wav = wav[:,ipix]
-flux = flux[:,ipix]
-blaze = blaze[:,ipix]
+# ipix = np.r_[1000:2000].astype(int)
+# npix = len(ipix)
+# wav = wav[:,ipix]
+# flux = flux[:,ipix]
+# blaze = blaze[:,ipix]
 
 ###################################################
 # compute photon noise errors & normalise spectra #
@@ -142,6 +142,12 @@ for i in np.arange(nfl):
 # flux = flux[:,250:750]
 # err = err[:,250:750]
 
+inline = np.zeros(flux.shape, 'bool')
+thresh = 0.9
+for i in range(nfl):
+    inline[i,:] = flux[i,:] < thresh
+    print inline[i,:].sum()
+
 t0 = clock()
 
 a0 = 0.19
@@ -160,13 +166,14 @@ def lnprob2(p):
     lnprior = -0.5 * npar * np.log(2*np.pi) \
       - 0.5 * npar * np.log(sigma_prior) \
       - (p**2/2./sigma_prior**2).sum()
-    dlw = p / SPEED_OF_LIGHT
-    for i in range(npar):
-        lwav_shift[i+1,:] = lwav_corr[i+1,:] + dlw[i]
-        wav_shift[i+1,:] = np.exp(lwav_shift[i+1]) * 1e10
-    x = wav_shift.flatten()
-    y = flux.flatten()
-    e = err.flatten()
+    pp = np.append(p, -p.sum())
+    dlw = pp / SPEED_OF_LIGHT
+    for i in range(npar+1):
+        lwav_shift[i] = lwav_corr[i,:] + dlw[i]
+        wav_shift[i] = np.exp(lwav_shift[i]) * 1e10
+    x = wav_shift[inline].flatten()
+    y = flux[inline].flatten()
+    e = err[inline].flatten()
     gp.compute(x, yerr = e, sort = True)
     lnlike = gp.lnlikelihood(y, quiet = True)
     return lnprior + lnlike
@@ -176,29 +183,36 @@ p0 = [np.zeros(ndim) + np.random.randn(ndim) for i in range(nwalkers)]
 sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2, threads=8)
 
 print 'running MCMC on velocities: burn in...'
-p0, _, _ = sampler.run_mcmc(p0, 100)
+nburn = 100
+nstep = 500
+p0, _, _ = sampler.run_mcmc(p0, nburn)
 print 'production run...'
-p0, _, _ = sampler.run_mcmc(p0, 500)
-samples = sampler.chain
+p0, _, _ = sampler.run_mcmc(p0, nstep)
+samp = sampler.chain
+samples = np.zeros((nwalkers,nstep,ndim+1))
+samples[:,:,:ndim] = samp[:,nburn:,:]
+for i in range(nwalkers):
+    for j in range(nstep):
+        samples[i,j,-1] = samp[i,j,:].sum()
 
 # plot chain 
 pl.figure()
-for i in range(ndim):
-    pl.subplot(ndim, 1, i+1)
+for i in range(ndim+1):
+    pl.subplot(ndim+1, 1, i+1)
     for j in range(nwalkers):
         pl.plot(samples[j,:,i], 'k-', alpha=0.3)
 pl.savefig('../plots/rollsRoyce_chain.png')
 
 # corner plot
-samples = samples.reshape(-1,ndim)
+samples = samples.reshape(-1,ndim+1)
 corner.corner(samples, show_titles=True, title_args={"fontsize": 12})
 pl.savefig('../plots/rollsRoyce_triangle.png')
 
 # print 16, 50 and 84 percentile values
 vals = map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), \
            zip(*np.percentile(samples, [16, 50, 84], axis=0)))
-p = np.zeros(ndim)
-for i in range(ndim):
+p = np.zeros(ndim+1)
+for i in range(ndim+1):
     print 'delta v(%d-0) = %.3f + %.3f -%.3f' % \
       (i+1, vals[i][0],vals[i][1],vals[i][2])
     p[i] = vals[i][0]
@@ -206,11 +220,11 @@ for i in range(ndim):
 # final shift and plot:
 dlw = p / SPEED_OF_LIGHT
 for i in range(len(p)):
-    lwav_shift[i+1,:] = lwav_corr[i+1,:] + dlw[i]
-    wav_shift[i+1,:] = np.exp(lwav_shift[i+1]) * 1e10
-x = wav_shift.flatten()
-y = flux.flatten()
-e = err.flatten()
+    lwav_shift[i,:] = lwav_corr[i,:] + dlw[i]
+    wav_shift[i,:] = np.exp(lwav_shift[i]) * 1e10
+x = wav_shift[inline].flatten()
+y = flux[inline].flatten()
+e = err[inline].flatten()
 s = np.argsort(x)
 x = x[s]
 y = y[s]
@@ -225,6 +239,7 @@ pl.plot(wav_shift.T, flux.T, '.')
 pl.plot(x, mu, 'k-')
 pl.fill_between(x, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
                 alpha = 0.4)
+pl.axhline(thresh, ls = '--', color = 'k')
 pl.subplot(212,sharex=ax1)
 pl.plot(x, y-mu, 'k.')
 pl.plot(x, mu-mu, 'k-')
