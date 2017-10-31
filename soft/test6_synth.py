@@ -81,26 +81,27 @@ lwav_corr = np.copy(lwav)
 # Select more points in spectral lines #
 ########################################
 
-sel = np.zeros(flux.shape, bool)
+# sel = np.zeros(flux.shape, bool)
 nmax = 1000
-nmax_per_spec = nmax / nfl
-if npix < nmax_per_spec:
-    sel = np.ones(flux.shape, bool)
-else:
-    sel = np.zeros(flux.shape, bool)
-    nbin = min(10, nmax_per_spec / 10)
-    nperbin = nmax_per_spec/ nbin
-    print 'Selecing %d points in each of the %d spectra (%d per bin in %d vertical bins) for a total of %d points' % (nmax_per_spec, nfl, nperbin, nbin, nmax)
-    for i in np.arange(nfl):
-        fc = flux[i,:]
-        fmin, fmax = fc.min(), fc.max()
-        df = (fmax - fmin) / float(nbin)
-        for j in np.arange(nbin):
-            l = np.where((fc >= fmin + j * df) & (fc < fmin + (j+1) * df))[0]
-            np.random.shuffle(l)
-            l = l[:nperbin]
-            sel[i,l] = True
-        
+# nmax_per_spec = nmax / nfl
+# if npix < nmax_per_spec:
+#     sel = np.ones(flux.shape, bool)
+# else:
+#     sel = np.zeros(flux.shape, bool)
+#     nbin = min(10, nmax_per_spec / 10)
+#     nperbin = nmax_per_spec/ nbin
+#     print 'Selecing %d points in each of the %d spectra (%d per bin in %d vertical bins) for a total of %d points' % (nmax_per_spec, nfl, nperbin, nbin, nmax)
+#     for i in np.arange(nfl):
+#         fc = flux[i,:]
+#         fmin, fmax = fc.min(), fc.max()
+#         df = (fmax - fmin) / float(nbin)
+#         for j in np.arange(nbin):
+#             l = np.where((fc >= fmin + j * df) & (fc < fmin + (j+1) * df))[0]
+#             np.random.shuffle(l)
+#             l = l[:nperbin]
+#             sel[i,l] = True
+sel = np.ones(flux.shape, bool)
+
 #####################
 # Rolls Royce model #
 #####################
@@ -114,6 +115,14 @@ gp = george.GP(kernel, mean = 1.0)
 
 lwav_shift = np.copy(lwav_corr)
 wav_shift = np.copy(wav_corr)
+
+ndat = sel.sum()
+nseg = 1
+n = ndat/nseg
+while (ndat/nseg) > nmax:
+    nseg += 1
+n = ndat/nseg
+print nseg, n
 
 def lnprob2(p):
     npar = len(p)
@@ -138,8 +147,20 @@ def lnprob2(p):
     x = x[s]
     y = y[s]
     e = e[s]
-    gp.compute(x, yerr = e)
-    lnlike = gp.lnlikelihood(y, quiet = True)
+    lnlike = 0
+    for iseg in range(nseg):
+        if iseg == nseg-1:
+            xx = x[iseg*n:]
+            yy = y[iseg*n:]
+            ee = e[iseg*n:]
+        else:
+            xx = x[iseg*n:(iseg+1)*n]
+            yy = y[iseg*n:(iseg+1)*n]
+            ee = e[iseg*n:(iseg+1)*n]
+        gp.compute(xx, yerr = ee)
+        lnlike += gp.lnlikelihood(yy, quiet = True)
+    # gp.compute(x, yerr = e)
+    # lnlike = gp.lnlikelihood(y, quiet = True)
     return lnprior + lnlike
     
 nwalkers, ndim = 32, nfl-1
@@ -150,6 +171,8 @@ print 'running MCMC on velocities: burn in...'
 nburn = 100
 nstep = 500
 p0, _, _ = sampler.run_mcmc(p0, nburn)
+t01 = clock()
+print 'Time taken %d sec' % (t1-t01)
 print 'production run...'
 p0, _, _ = sampler.run_mcmc(p0, nstep)
 samp = sampler.chain
@@ -208,7 +231,7 @@ mu_err = np.sqrt(np.diag(cov))
 
 pl.figure()
 pl.plot(wav_shift.T, flux.T, '.')
-pl.plot(wav_shift[inline].flatten(), flux[inline].flatten(), \
+pl.plot(wav_shift[sel].flatten(), flux[sel].flatten(), \
         'o', c = 'none', mec = 'k')
 pl.plot(wav_mu, mu, 'k-')
 pl.fill_between(wav_mu, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
