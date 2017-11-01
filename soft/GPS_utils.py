@@ -2,28 +2,30 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from celerite import terms, GP
+import emcee, corner
+import sys
+import matplotlib.gridspec as gridspec
+import scipy.io.matlab as siom
+
+SPEED_OF_LIGHT = 2.99796458e8
 
 def NLL0(p, gp, y):
     gp.set_parameter_vector(p)
     g = gp.grad_log_likelihood(y, quiet=True)
     return -g[0], -g[1]
 
-def Fit0(x, y, yerr = None, kernel = 'M32', HP_init = [0.0, 0.0], \
-             mean = 1.0, verbose = True, doPlot = False, \
+def Fit0(x, y, yerr = None, verbose = True, doPlot = False, \
              xpred = None):
-    if kernel == 'M32':
-        k = terms.Matern32Term(log_sigma = HP_init[0], log_rho = HP_init[1])
-    else:
-        k = kernel(HP_init)
-    gp = GP(k, mean = mean)
+    k = terms.Matern32Term(log_sigma = 0.0, log_rho = 0.0)
+    gp = GP(k, mean = 1.0)
     gp.compute(x, yerr = yerr)
-    soln = minimize(NLL0, HP_init, jac=True, args=(gp,y))
+    soln = minimize(NLL0, gp.get_parameter_vector(), jac=True, args=(gp,y))
     gp.set_parameter_vector(soln.x)
     if verbose:
         print 'Initial pars:', HP_init
         print 'Fitted pars:', soln.x
     if xpred is None:
-        xpred = x[:]
+        return soln.x
     mu, var = gp.predict(y, xpred, return_var = True)
     std = np.sqrt(var)
     if doPlot:
@@ -95,82 +97,254 @@ def Wolkswagen(x2d, y2d, y2derr, truevel, doLog = True, sampling = 100, wav2si =
 # Probably best to focus on getting Rolls Royce working though next                #
 ####################################################################################
 
+def LP1(p, gp, x2d, y2d, y2derr):
+    K = x2d.shape[0]
+    shifts = np.append(0, p[:K-1])
+    x1d = (x2d + shifts[:, None]).flatten()
+    inds = np.argsort(x1d)
+    gp.set_parameter_vector(p[K-1:])
+    y1d = y2d.flatten()
+    y1derr = y2derr.flatten()
+    try:
+        gp.compute(x1d[inds], yerr = y1derr[inds])
+    except LinAlgError:
+        return -np.inf
+    return gp.log_likelihood(y1d[inds], quiet=True)
 
+def NLL1(p, gp, x2d, y2d, y2derr):
+    return -LP1(p, gp, x2d, y2d, y2derr)
 
-# def Fit0(x, y, yerr = None, kernel = 'M32', HP_init = [0.0, 0.0], \
-#              mean = 1.0, verbose = True, doPlot = False, \
-#              xpred = None):
-             
-# def NLL1(p, gp, x2d, y2d, y2derr):
-#     x1d = (x2d + p[:-2, None]).flatten()
-#     inds = np.argsort(x1d)
-#     gp.set_parameter_vector(p[-2:])
-#     y1d = y2d.flatten()
-#     y1derr = y2derr.flatten()
-#     gp.compute(x1d[inds], yerr = y1derr[inds])
-#     g = gp.grad_log_likelihood(y1d[inds], quiet=True)
-#     return -g[0], -g[1]
+def Fit1(x2d, y2d, y2derr, par_in = None, verbose = True):
+    K = x2d.shape[0]
+    if par_in is None:
+        par_in = np.zeros(K+1)        
+    k = terms.Matern32Term(log_sigma = par_in[-2], log_rho = par_in[-1])
+    gp = GP(k, mean = 1.0)
+    soln = minimize(NLL1, par_in, args=(gp, x2d, y2d, y2derr))
+    if verbose:
+        print 'Initial pars:', par_in
+        print 'Fitted pars:', soln.x
+    return soln.x
 
+def Pred1_2D(par, x2d, y2d, y2derr, doPlot = True, x2dpred = None):
+    K = x2d.shape[0]
+    k = terms.Matern32Term(log_sigma = par[-2], log_rho = par[-1])
+    gp = GP(k, mean = 1.0)
+    shifts = np.append(0,par[:K-1]) 
+    x1d = (x2d + shifts[:, None]).flatten()
+    inds = np.argsort(x1d)
+    y1d = y2d.flatten()
+    y1derr = y2derr.flatten()
+    gp.compute(x1d[inds], yerr = y1derr[inds])
+    if x2dpred is None:
+        x2dpred = np.copy(x2d)
+    x1dpred = (x2dpred + shifts[:, None]).flatten()
+    indspred = np.argsort(x1dpred)
+    mu, var = gp.predict(y1d[inds], x1dpred[indspred], return_var = True)
+    std = np.sqrt(var)
+    y1dpred = np.zeros_like(x1dpred)
+    y1dpred[indspred] = mu
+    y1dprederr = np.zeros_like(x1dpred)
+    y1dprederr[indspred] = std
+    y2dpred = y1dpred.reshape(x2dpred.shape)
+    y2dprederr = y1dprederr.reshape(x2dpred.shape)    
+    if doPlot:
+        for i in range(K):
+            plt.errorbar(x2d[i,:], y2d[i,:] - i, yerr = y2derr[i,:], fmt = ".k", capsize = 0, alpha = 0.5)
+            plt.plot(x2dpred[i,:], y2dpred[i,:] - i, 'C0')
+            plt.fill_between(x2dpred[i,:], y2dpred[i,:] + y2dprederr[i,:] - i, \
+                                 y2dpred[i,:] - y2dprederr[i,:] - i, color = 'C0', alpha = 0.4, lw = 0)
+    return x2dpred, y2dpred, y2dprederr
+
+def RollsRoyce_1Comp(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1'):
+    # NB: input wavelengths should be in nm, flux continuum should be about 1
+    K, N = wav.shape
+    # Create 2-D array of scaled log wavelengths for fitting
+    lwav = np.log(wav * 1e-9) # in m
+    lw0, lw1 = lwav.min(), lwav.max()
+    x = (lwav - lw0) / (lw1 - lw0)
+    # First do GP fit to individual spectra to get estimate of GP HPs
+    print 'GP fit to individual spectra'
+    HPs = np.zeros((K,2))
+    for i in range(K):
+        xx = x[i,:].flatten()
+        yy = flux[i,:].flatten()
+        ee = flux_err[i,:].flatten()
+        HPs[i,:] = Fit0(xx, yy, ee, verbose = False, xpred = None)
+    HPs = np.median(HPs, axis=0)
+    print 'Initial GP HPs:', HPs
+    # Initial (ML) estimate of parameters
+    print "Starting ML fit"
+    par_in = np.zeros(K+1)
+    par_in[-2:] = HPs
+    ML_par = np.array(Fit1(x, flux, flux_err, verbose = False, par_in = par_in))
+    par_ML = np.copy(ML_par)
+    par_ML[:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
+    par_ML[-1] *= (lw1 - lw0)
+    k = terms.Matern32Term(log_sigma = ML_par[-2], log_rho = ML_par[-1])
+    gp = GP(k, mean = 1.0)
+    print "ML fit done"
+    # MCMC
+    print "Starting MCMC"
+    ndim = K+1
+    nwalkers = ndim * 4
+    p0 = ML_par + 1e-4 * np.random.randn(nwalkers, ndim)
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, LP1,
+                                        args = [gp, x, flux, flux_err])
+    for i, result in enumerate(sampler.sample(p0, iterations=nsteps)):
+        n = int((30+1) * float(i) / nsteps)
+        sys.stdout.write("\r[{0}{1}]".format('#' * n, ' ' * (30 - n)))
+    sys.stdout.write("\n")
+    print("MCMC done")
+    # find MAP parameters
+    iMAP = np.argmax(sampler.flatlnprobability)
+    MAP_par = sampler.flatchain[iMAP,:].flatten()
+    # extract MCMC chains
+    samples = sampler.chain
+    Lprob = sampler.lnprobability    
+    # convert chains back to physical units: shifts in km/s
+    samples_tpl = np.copy(samples)
+    samples_tpl[:,:,:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
+    samples_tpl[:,:,-1] *= (lw1 - lw0)
+    par_MAP = np.copy(MAP_par)
+    par_MAP[:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
+    par_MAP[-1] *= (lw1 - lw0)
+    # parameter names for plots
+    labels = []
+    for i in range(K-1):
+        labels.append(r'$\delta v_{%d}$ (km/s)' % (i+1))
+    labels.append(r'$\ln \sigma$')
+    labels.append(r'$\ln \rho$')
+    labels = np.array(labels)
+    names = []
+    for i in range(K-1):
+        names.append('dv_%d (km/s)' % (i+1))
+    names.append('ln(sig)')
+    names.append('ln(rho)')
+    names = np.array(names)
+    # Plot the chains
+    fig1 = plt.figure(figsize = (12,K+3))
+    gs1 = gridspec.GridSpec(ndim+1,1)
+    gs1.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
+    ax1 = plt.subplot(gs1[0,0])    
+    plt.setp(ax1.get_xticklabels(), visible=False)
+    plt.plot(Lprob.T, 'k-', alpha = 0.2)
+    plt.ylabel(r'$\ln P$')
+    for i in range(ndim):
+        axc = plt.subplot(gs1[i+1,0], sharex = ax1)    
+        if i < (ndim-1):
+            plt.setp(axc.get_xticklabels(), visible=False)
+        plt.plot(samples_tpl[:,:,i].T, 'k-', alpha = 0.2)
+        plt.ylabel(labels[i])
+    plt.xlim(0,nsteps)
+    plt.xlabel('iteration number')
+    # Discard burnout
+    nburn = int(raw_input('Enter no. steps to discard as burnout: '))
+    plt.axvline(nburn)
+    # Evaluate and print the parameter ranges
+    print '\n{:20s}: {:10s} {:10s} {:10s} - {:7s} + {:7s}'.format('Parameter', 'ML', 'MAP', \
+                                                                    'Median','Error','Error')
+    par50 = np.zeros(ndim)
+    par84 = np.zeros(ndim)
+    par16 = np.zeros(ndim)
+    for i in range(ndim):
+        sam = samples_tpl[:,:,i].flatten()
+        b, m, f = np.percentile(sam, [16,50,84])
+        par50[i] = m
+        par16[i] = b
+        par84[i] = f
+        print '{:20s}: {:10.5f} {:10.5f} {:10.5f} - {:7.5f} + {:7.5f}'.format(names[i], \
+                                                                                  par_ML[i], \
+                                                                                  par_MAP[i], \
+                                                                                  m, m-b, f-m)
+    if prefix is None:
+        return par_MAP, par50, par50-par16, par84-par50
+    plt.savefig('%s_chains.png' % prefix)
+    samples_flat = samples[:,nburn:,:].reshape(-1, ndim)
+    samples_tpl_flat = samples_tpl[:,nburn:,:].reshape(-1, ndim)
+    # Plot the parameter distributions
+    fig2 = corner.corner(samples_tpl_flat, truths = par_MAP, labels = labels, show_titles = True, \
+                            quantiles = [0.16, 0.84])
+    plt.savefig('%s_corner.png' % prefix)
+    # Plot the individual spectra with MAP fit
+    xpred, fpred, fpred_err = Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
+    lwpred = (lw1-lw0) * xpred + lw0
+    wpred = np.exp(lwpred) * 1e9
+    fig3 = plt.figure(figsize = (12,K+1))
+    gs3 = gridspec.GridSpec(K,1)
+    gs3.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
+    for i in range(K):
+        if i == 0:
+            ax1 = plt.subplot(gs3[0,0])
+        else:
+            axc = plt.subplot(gs3[i,0], sharex=ax1, sharey=ax1)
+        if i < (K-1):
+            plt.setp(ax1.get_xticklabels(), visible=False)
+        plt.errorbar(wav[i,:], flux[i,:], yerr = flux_err[i,:], \
+                         fmt = ".k", ms = 2, mec = 'none', capsize = 0, alpha = 0.5)
+        plt.plot(wpred[i,:], fpred[i,:], 'C0')
+        plt.fill_between(wpred[i,:], fpred[i,:] + 2 * fpred_err[i,:], \
+                             fpred[i,:] - fpred_err[i,:], color = 'C0', alpha = 0.4, lw = 0)
+        plt.ylabel('spec. %d' % (i+1))
+    plt.xlim(wav.min(), wav.max())
+    plt.xlabel('wavelength (nm)')
+    plt.savefig('%s_spectra.png' % prefix)
+    # Plot the combined spectra with samples from MCMC chain
+    shifts = np.append(0,MAP_par[:K-1])
+    x1d = (x + shifts[:, None]).flatten()
+    lw1d = (lw1-lw0) * x1d + lw0
+    w1d = np.exp(lw1d) * 1e9
+    y1d = flux.flatten()
+    y1derr = flux_err.flatten()
+    inds = np.argsort(x1d)
+    gp.set_parameter_vector(MAP_par[-2:])
+    gp.compute(x1d[inds], yerr = y1derr[inds])
+    fig4 = plt.figure(figsize = (12,nrange+1))
+    gs4 = gridspec.GridSpec(nrange,1)
+    gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.05)
+    ws = w1d.min()
+    wr = (w1d.max()-ws) / float(nrange)
+    for i in range(nrange):
+        if i == 0:
+            ax1 = plt.subplot(gs4[0,0])
+        else:
+            axc = plt.subplot(gs4[i,0], sharey=ax1)
+        if i < (nrange-1):
+            plt.setp(ax1.get_xticklabels(), visible=False)
+        wmin = ws + (i - 0.05) * wr
+        wmax = ws + (i + 1.05) * wr
+        l = (w1d >= wmin) * (w1d <= wmax)
+        plt.errorbar(w1d[l], y1d[l], yerr = y1derr[l], fmt = ".k", capsize = 0, \
+                         alpha = 0.5, ms = 2, mec='none')
+        wpred = np.linspace(wmin, wmax, 1000)
+        lwpred = np.log(wpred * 1e-9)
+        xpred = (lwpred-lw0)/(lw1-lw0)
+        isamp = np.random.randint(nsteps-nburn, size=10)
+        for j in isamp:
+            samp_params = samples_flat[j,:].flatten()
+            samp_shifts = np.append(0, samp_params[:K-1])
+            x1_samp = (x + samp_shifts[:, None]).flatten()
+            inds_samp = np.argsort(x1_samp)
+            k_samp = terms.Matern32Term(log_sigma=samp_params[-2],log_rho=samp_params[-1])
+            gp_samp = GP(k_samp, mean=1.)
+            gp_samp.compute(x1_samp[inds_samp], yerr = y1derr[inds_samp])
+            mu, _ = gp.predict(y1d[inds_samp], xpred, return_var = True)
+            plt.plot(wpred, mu, 'C0-', lw = 0.5, alpha = 0.5)
+        plt.xlim(wmin, wmax)
+        plt.ylabel('flux')
+    plt.xlabel('wavelength (nm)')
+    plt.savefig('%s_combined.png' % prefix)
+    return par_MAP, par50, par50-par16, par84-par50, [fig1, fig2, fig3, fig4]
     
-# def Fit1(x2d, y2d, y2derr = None, kernel = 'M32', HP_init = [0.0, 0.0], \
-#              SH_init = None, mean = 1.0, verbose = True, doPlot = False):
-#     if kernel == 'M32':
-#         k = terms.Matern32Term()
-#     else:
-#         k = kernel()
-#     gp = GP(k, mean = 1.0)
-#     gp.compute(x, yerr = yerr)
-#     if SH_init:
-#         p0 = np.concatenate([SH_init, HP_init]).flatten()
-#     else:
-#         p0 = np.concatenate([np.zeros(K-1), HP_init]).flatten()
-#     soln = minimize(NLL0, HP_init, jac=True)
-#     gp.set_parameter_vector(soln.x)
-#     mu, var = gp.predict(y, x, return_var = True)
-#     std = np.sqrt(var)
-#     if verbose:
-#         print 'Initial pars:', HP_init
-#         print 'Fitted pars:', soln.x
-#     if doPlot:
-#         plt.errorbar(x, y, yerr = yerr, fmt = ".k", capsize = 0)
-#         plt.plot(x, mu, 'C0')
-#         plt.fill_between(x, mu + std, mu - std, 'C0', alpha = 0.4, lw = 0)
-#     return solnx, mu, std
-
-# K, N = x2d.shape
-#     np = len(p)
-#     shifts = p[:K-1]
-#     shifts = shift_func(shift_par, *shift_arg)
-#     x2ds = np.copy(x2d)
-    
-#     if np == K+1
-#     if np == K-1:
-#         # fit shifts only
-#         shifts = 
-#     gp.set_parameter_vector(p)
-#     g = gp.grad_log_likelihood(y, quiet=True)
-#     return -g[0], -g[1]
-
-# def Fit1Comp(x2d, y2d, y2derr = None, kernel = 'M32', HP_init = [0.0, 0.0], \
-#                  mean = 1.0, XP_init = None, XP_func = None, XP_args = None, \
-#                  verbose = True, doPlot = False):
-#     K, N = x2d.shape
-#     if kernel == 'M32':
-#         k = terms.Matern32Term()
-#     else:
-#         k = kernel()
-#     gp = GP(k, mean = 1.0)
-#     gp.compute(x, yerr = yerr)
-#     soln = minimize(NLL1, HP_init, jac=True)
-#     gp.set_parameter_vector(soln.x)
-#     mu, var = gp.predict(y, x, return_var = True)
-#     std = np.sqrt(var)
-#     if verbose:
-#         print 'Initial pars:', HP_init
-#         print 'Fitted pars:', soln.x
-#     if doPlot:
-#         plt.errorbar(x, y, yerr = yerr, fmt = ".k", capsize = 0)
-#         plt.plot(x, mu, 'C0')
-#         plt.fill_between(x, mu + std, mu - std, 'C0', alpha = 0.4, lw = 0)
-#     return solnx, mu, std
-
+def test():
+    plt.close('all')
+    d = siom.loadmat('/Users/aigrain/Soft/GPSpec/data/synth_dataset_002.mat')
+    wav = d['wavelength'] * 0.1
+    flux = d['flux']
+    flux_err = d['error']
+    baryvel = d['baryvel'].flatten()
+    starvel = d['starvel'].flatten()
+    true_shifts = (baryvel[1:] + starvel[1:]) - (baryvel[0] + starvel[0])
+    print true_shifts * 1e-3
+    figs = RollsRoyce_1Comp(wav, flux, flux_err, nsteps = 2000, prefix = 'synth2')
+    return
