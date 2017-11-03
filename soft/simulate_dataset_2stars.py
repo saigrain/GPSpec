@@ -32,39 +32,30 @@ def gauss1(x,a,mu,sig):
 # of a pixel)
 baryvel_max = SPEED_OF_LIGHT * 2 / (wmax + wmin)
 baryvel = np.random.uniform(high = baryvel_max, size = nsim)
+baryvel[:] = 0.0
 print baryvel
 
 starvel = np.zeros((nsim, ncomp))
 flux = np.ones((nsim, npix))
-# Define generic properties of spectral lines
-nlines = 10
-m = np.random.uniform(wmin, wmax,nlines)
-s = 10.0**np.random.uniform(-1,0.5,nlines)
-# even the narrowest lines are well sampled
-a = 0.05*10.0**np.random.uniform(0,1,nlines)
-fac = 0.5
+nlines = 6
 
 for c in range(ncomp):
 
     # Define intrinsic velocity shifts of up to 2000 km/s
     starvel[:,c] = np.random.uniform(high = 2000.0e3, size=nsim)
-    print starvel[:,c]
-
+    
     dlw = (baryvel + starvel[:,c].flatten()) / SPEED_OF_LIGHT
     lwav_rest = np.zeros((nsim, npix))
     for i in np.arange(nsim):
         lwav_rest[i,:] = lwav + dlw[i]
     wav_rest = np.exp(lwav_rest) * 1e10
-
-    if c>0:
-        # for each new component the lines get shallower and broader
-        a *= fac
-        s /= fac
         
     # Simulate emitted spectra
-    for i in np.arange(nsim):
-        for j in np.arange(nlines):
-            flux[i,:] -= gauss1(wav_rest[i,:], a[j], m[j], s[j])
+    for j in np.arange(nlines):
+        m = np.random.uniform(wmin, wmax, 1)
+        s = 10.0**np.random.uniform(-1, 0.5, 1)
+        a = 0.05*10.0**np.random.uniform(0, 1, 1)
+        flux -= gauss1(wav_rest, a, m, s)
 
 # Degrade resolution
 flux_deg = np.copy(flux)
@@ -87,7 +78,7 @@ for i in np.arange(nsim):
     flux_obs[i,:] = flux_deg[i,::resol]
 
 # Add noise
-sigma = 0.01 * np.sqrt(flux_obs)
+sigma = 0.002 * np.sqrt(flux_obs)
 flux_noisy = np.copy(flux_obs)
 for i in np.arange(nsim):
     noise = np.random.normal(0,1,npix_new) * sigma[i,:]
@@ -95,7 +86,7 @@ for i in np.arange(nsim):
 
 pl.clf()
 for i in range(nsim):
-    pl.plot(wav_obs[i,:], flux_noisy[i,:]-i, '.')
+    pl.plot(wav_obs[i,:], flux_noisy[i,:]-i*0.2, '.')
 pl.ylabel('flux')
 pl.xlim(wmin, wmax)
 pl.xlabel('wavelength (Angstrom')

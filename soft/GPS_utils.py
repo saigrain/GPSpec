@@ -2,11 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from celerite import terms, GP
+import george
 from scipy.sparse.linalg import LinearOperator, cg
 import emcee, corner
 import sys
 import matplotlib.gridspec as gridspec
 import scipy.io.matlab as siom
+import scipy.linalg as sla
 
 SPEED_OF_LIGHT = 2.99796458e8
 
@@ -34,12 +36,13 @@ def Fit0(x, y, yerr, verbose = True, doPlot = False, \
     mu, var = gp.predict(y, xpred, return_var = True)
     std = np.sqrt(var)
     if doPlot:
-        plt.errorbar(xpred, y, yerr = yerr, fmt = ".k", capsize = 0)
+        plt.errorbar(x, y, yerr = yerr, fmt = ".k", capsize = 0)
         plt.plot(xpred, mu, 'C0')
-        plt.fill_between(xpred, mu + std, mu - std, 'C0', alpha = 0.4, lw = 0)
+        plt.fill_between(xpred, mu + std, mu - std,  color = 'C0', alpha = 0.4, lw = 0)
     return soln.x, mu, std
 
-def Fit0_Jitter(x, y, yerr, verbose = True):
+def Fit0_Jitter(x, y, yerr, verbose = True, doPlot = False, \
+                    xpred = None):
     k = terms.Matern32Term(log_sigma = 0.0, log_rho = 0.0)
     k += terms.JitterTerm(log_sigma = np.log(np.median(yerr)))
     gp = GP(k, mean = 1.0)
@@ -49,7 +52,18 @@ def Fit0_Jitter(x, y, yerr, verbose = True):
     if verbose:
         print 'Initial pars:', HP_init
         print 'Fitted pars:', soln.x
-    return soln.x
+    if xpred is None:
+        return soln.x
+    mu, var = gp.predict(y, xpred, return_var = True)
+    std = np.sqrt(var)
+    print xpred.shape
+    print mu.shape
+    print std.shape
+    if doPlot:
+        plt.errorbar(x, y, yerr = yerr, fmt = ".k", capsize = 0)
+        plt.plot(xpred, mu, 'C0')
+        plt.fill_between(xpred, mu + std, mu - std, color = 'C0', alpha = 0.4, lw = 0)
+    return soln.x, mu, std
 
 ####################################################################################
 # Single component case - using celerite out of the box                            #
@@ -321,6 +335,7 @@ def NLL2(params, gp1, gp2, x2d, y2d):
     x2 = (x2d + s2[:, None]).flatten()
     inds2 = np.argsort(x2)
     x2 = x2[inds2]
+    y1 = y2d.flatten()
     # Define a custom "LinearOperator"
     def matvec(v):
         res = np.empty_like(v)
@@ -329,60 +344,62 @@ def NLL2(params, gp1, gp2, x2d, y2d):
         return res
     op = LinearOperator((K*N, K*N), matvec=matvec)
     # Solve the system and compute the first term of the log likelihood
-    y1 = y2d.flatten()
-    soln = cg(op, y1, tol=0.1)
+    soln = cg(op, y1, tol=0.01)
     value = 0.5 * np.dot(y1, soln[0])
     return value
 
-def LP2(p, gp, x2d, y2d):
+def LP2(p, gp1, gp2, x2d, y2d):
     return -NLL2(p, gp1, gp2, x2d, y2d)
 
-def Fit2(x2d, y2d, y2derr, HPs, verbose = True):
+def Fit2(x2d, y2d, gp1, gp2, verbose = True, par_in = None):
     K = x2d.shape[0]
-    k = terms.Matern32Term(log_sigma = HPs[0], log_rho = HPs[1])
-    k += terms.JitterTerm(log_sigma = HPs[2])
-    gp1 = GP(k, mean = 1.0)
-    gp2 = GP(k, mean = 1.0)
-    par_in = np.zeros(2*(K-1))
+    if par_in is None:
+        par_in = np.zeros(2*(K-1))
+    nll_in = NLL2(par_in, gp1, gp2, x2d, y2d)
+    if verbose:
+        nll_in = NLL2(par_in, gp1, gp2, x2d, y2d)
+        print 'Initial NLL:', nll_in
+        print 'Initial par:', par_in
     soln = minimize(NLL2, par_in, args=(gp1, gp2, x2d, y2d))
     if verbose:
-        print 'Initial pars:', par_in
-        print 'Fitted pars:', soln.x
+        print 'Final NLL:', soln.fun
+        print 'Final pars:', soln.x
     return soln.x
 
-# def Pred2_2D(par, x2d, y2d, y2derr, doPlot = True, x2dpred = None):
-#     K = x2d.shape[0]
-#     k = terms.Matern32Term(log_sigma = par[-3], log_rho = par[-2])
-#     k += terms.JitterTerm(log_sigma = par[-1])
-#     gp1 = GP(k, mean = 1.0)
-#     gp2 = GP(k, mean = 1.0)
-#     shifts = np.append(0,par[:K-1]) 
-#     x1d = (x2d + shifts[:, None]).flatten()
-#     inds = np.argsort(x1d)
-#     y1d = y2d.flatten()
-#     y1derr = y2derr.flatten()
-#     gp.compute(x1d[inds], yerr = y1derr[inds])
-#     if x2dpred is None:
-#         x2dpred = np.copy(x2d)
-#     x1dpred = (x2dpred + shifts[:, None]).flatten()
-#     indspred = np.argsort(x1dpred)
-#     mu, var = gp.predict(y1d[inds], x1dpred[indspred], return_var = True)
-#     std = np.sqrt(var)
-#     y1dpred = np.zeros_like(x1dpred)
-#     y1dpred[indspred] = mu
-#     y1dprederr = np.zeros_like(x1dpred)
-#     y1dprederr[indspred] = std
-#     y2dpred = y1dpred.reshape(x2dpred.shape)
-#     y2dprederr = y1dprederr.reshape(x2dpred.shape)    
-#     if doPlot:
-#         for i in range(K):
-#             plt.errorbar(x2d[i,:], y2d[i,:] - i, yerr = y2derr[i,:], fmt = ".k", capsize = 0, alpha = 0.5)
-#             plt.plot(x2dpred[i,:], y2dpred[i,:] - i, 'C0')
-#             plt.fill_between(x2dpred[i,:], y2dpred[i,:] + y2dprederr[i,:] - i, \
-#                                  y2dpred[i,:] - y2dprederr[i,:] - i, color = 'C0', alpha = 0.4, lw = 0)
-#     return x2dpred, y2dpred, y2dprederr
+def Pred2_2D(par, x2d, y2d, y2derr, HPs, xpred = None):
+    k = np.exp(HPs[0])**2 * george.kernels.Matern32Kernel((np.exp(HPs[1]))**2)
+    gp = george.GP(k, mean=0.0)
+    K, N = x2d.shape
+    s1 = np.append(0.0, par[:K-1])
+    x1 = (x2d + s1[:, None]).flatten()
+    K1 = gp.get_matrix(x1)
+    s2 = np.append(0.0, par[K-1:])
+    x2 = (x2d + s2[:, None]).flatten()
+    K2 = gp.get_matrix(x2)
+    Ktot = K1 + K2 + np.identity(N * K) * (np.exp(HPs[2]))**2
+    L = sla.cho_factor(Ktot)
+    y = y2d.flatten() - 1.0
+    b = sla.cho_solve(L, y)
+    if xpred is None:
+        xpred = np.copy(x2d)
+    x1pred = (xpred + s1[:, None]).flatten()
+    K1s = gp.get_matrix(x1pred, x1)
+    x2pred = (xpred + s2[:, None]).flatten()
+    K2s = gp.get_matrix(x2pred, x2)
+    Ks = K1s + K2s
+    K1ss = gp.get_matrix(x1pred)
+    K2ss = gp.get_matrix(x2pred)
+    Kss = K1ss + K2ss
+    mu1 = np.dot(K1s, b).reshape(xpred.shape)
+    mu2 = np.dot(K2s, b).reshape(xpred.shape)
+    mu = np.dot(Ks, b).reshape(xpred.shape)
+    c = sla.cho_solve(L, Ks.T)
+    cov = Kss - np.dot(Ks, c)
+    var = np.diag(cov)
+    std = np.sqrt(var).reshape(xpred.shape)
+    return mu+1, std, mu1+1, mu2+1
 
-def GPSpec_2Comp(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1'):
+def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 3, prefix = 'RR1'):
     # NB: input wavelengths should be in nm, flux continuum should be about 1
     K, N = wav.shape
     # Create 2-D array of scaled log wavelengths for fitting
@@ -399,121 +416,130 @@ def GPSpec_2Comp(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1')
         HPs[i,:] = Fit0_Jitter(xx, yy, ee, verbose = False)
     HPs = np.median(HPs, axis=0)
     print 'GP HPs:', HPs
+    k = terms.Matern32Term(log_sigma = HPs[0], log_rho = HPs[1])
+    k += terms.JitterTerm(log_sigma = HPs[2])
+    gp1 = GP(k, mean = 1.0)
+    gp2 = GP(k, mean = 1.0)
     # Initial (ML) estimate of parameters
     print "Starting ML fit"
-    ML_par = np.array(Fit2(x, flux, flux_err, HPs, verbose = False))
+    if shifts_in is None:
+        shifts_in = np.zeros(2*(K-1))
+    par_in = shifts_in / SPEED_OF_LIGHT / (lw1-lw0)
+    # ML_par = np.array(Fit2(x, flux, gp1, gp2, verbose = False, par_in = par_in))
+    ML_par = np.copy(par_in)
     par_ML = np.copy(ML_par)
     par_ML[:2*(K-1)] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
     par_ML[-2] *= (lw1 - lw0)
-    return par_ML
-    # k = terms.Matern32Term(log_sigma = ML_par[-2], log_rho = ML_par[-1])
-    # gp = GP(k, mean = 1.0)
-    # print "ML fit done"
-    # # MCMC
-    # print "Starting MCMC"
-    # ndim = K+1
-    # nwalkers = ndim * 4
-    # p0 = ML_par + 1e-4 * np.random.randn(nwalkers, ndim)
-    # sampler = emcee.EnsembleSampler(nwalkers, ndim, LP2,
-    #                                     args = [gp, x, flux, flux_err])
-    # for i, result in enumerate(sampler.sample(p0, iterations=nsteps)):
-    #     n = int((30+1) * float(i) / nsteps)
-    #     sys.stdout.write("\r[{0}{1}]".format('#' * n, ' ' * (30 - n)))
-    # sys.stdout.write("\n")
-    # print("MCMC done")
-    # # find MAP parameters
-    # iMAP = np.argmax(sampler.flatlnprobability)
-    # MAP_par = sampler.flatchain[iMAP,:].flatten()
-    # # extract MCMC chains
-    # samples = sampler.chain
-    # Lprob = sampler.lnprobability    
-    # # convert chains back to physical units: shifts in km/s
-    # samples_tpl = np.copy(samples)
-    # samples_tpl[:,:,:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
-    # samples_tpl[:,:,-1] *= (lw1 - lw0)
-    # par_MAP = np.copy(MAP_par)
-    # par_MAP[:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
-    # par_MAP[-1] *= (lw1 - lw0)
-    # # parameter names for plots
-    # labels = []
-    # for i in range(K-1):
-    #     labels.append(r'$\delta v_{%d}$ (km/s)' % (i+1))
-    # labels.append(r'$\ln \sigma$')
-    # labels.append(r'$\ln \rho$')
-    # labels = np.array(labels)
-    # names = []
-    # for i in range(K-1):
-    #     names.append('dv_%d (km/s)' % (i+1))
-    # names.append('ln(sig)')
-    # names.append('ln(rho)')
-    # names = np.array(names)
-    # # Plot the chains
-    # fig1 = plt.figure(figsize = (12,K+3))
-    # gs1 = gridspec.GridSpec(ndim+1,1)
-    # gs1.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
-    # ax1 = plt.subplot(gs1[0,0])    
-    # plt.setp(ax1.get_xticklabels(), visible=False)
-    # plt.plot(Lprob.T, 'k-', alpha = 0.2)
-    # plt.ylabel(r'$\ln P$')
-    # for i in range(ndim):
-    #     axc = plt.subplot(gs1[i+1,0], sharex = ax1)    
-    #     if i < (ndim-1):
-    #         plt.setp(axc.get_xticklabels(), visible=False)
-    #     plt.plot(samples_tpl[:,:,i].T, 'k-', alpha = 0.2)
-    #     plt.ylabel(labels[i])
-    # plt.xlim(0,nsteps)
-    # plt.xlabel('iteration number')
-    # # Discard burnout
-    # nburn = int(raw_input('Enter no. steps to discard as burnout: '))
-    # plt.axvline(nburn)
-    # # Evaluate and print the parameter ranges
-    # print '\n{:20s}: {:10s} {:10s} {:10s} - {:7s} + {:7s}'.format('Parameter', 'ML', 'MAP', \
-    #                                                                 'Median','Error','Error')
-    # par50 = np.zeros(ndim)
-    # par84 = np.zeros(ndim)
-    # par16 = np.zeros(ndim)
-    # for i in range(ndim):
-    #     sam = samples_tpl[:,:,i].flatten()
-    #     b, m, f = np.percentile(sam, [16,50,84])
-    #     par50[i] = m
-    #     par16[i] = b
-    #     par84[i] = f
-    #     print '{:20s}: {:10.5f} {:10.5f} {:10.5f} - {:7.5f} + {:7.5f}'.format(names[i], \
-    #                                                                               par_ML[i], \
-    #                                                                               par_MAP[i], \
-    #                                                                               m, m-b, f-m)
-    # if prefix is None:
-    #     return par_MAP, par50, par50-par16, par84-par50
-    # plt.savefig('%s_chains.png' % prefix)
-    # samples_flat = samples[:,nburn:,:].reshape(-1, ndim)
-    # samples_tpl_flat = samples_tpl[:,nburn:,:].reshape(-1, ndim)
-    # # Plot the parameter distributions
-    # fig2 = corner.corner(samples_tpl_flat, truths = par_MAP, labels = labels, show_titles = True, \
-    #                         quantiles = [0.16, 0.84])
-    # plt.savefig('%s_corner.png' % prefix)
-    # # Plot the individual spectra with MAP fit
-    # xpred, fpred, fpred_err = Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
-    # lwpred = (lw1-lw0) * xpred + lw0
-    # wpred = np.exp(lwpred) * 1e9
-    # fig3 = plt.figure(figsize = (12,K+1))
-    # gs3 = gridspec.GridSpec(K,1)
-    # gs3.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
-    # for i in range(K):
-    #     if i == 0:
-    #         ax1 = plt.subplot(gs3[0,0])
-    #     else:
-    #         axc = plt.subplot(gs3[i,0], sharex=ax1, sharey=ax1)
-    #     if i < (K-1):
-    #         plt.setp(ax1.get_xticklabels(), visible=False)
-    #     plt.errorbar(wav[i,:], flux[i,:], yerr = flux_err[i,:], \
-    #                      fmt = ".k", ms = 2, mec = 'none', capsize = 0, alpha = 0.5)
-    #     plt.plot(wpred[i,:], fpred[i,:], 'C0')
-    #     plt.fill_between(wpred[i,:], fpred[i,:] + 2 * fpred_err[i,:], \
-    #                          fpred[i,:] - fpred_err[i,:], color = 'C0', alpha = 0.4, lw = 0)
-    #     plt.ylabel('spec. %d' % (i+1))
-    # plt.xlim(wav.min(), wav.max())
-    # plt.xlabel('wavelength (nm)')
-    # plt.savefig('%s_spectra.png' % prefix)
+    print "ML fit done"
+    # MCMC
+    print "Starting MCMC"
+    ndim = len(ML_par)
+    nwalkers = ndim * 4
+    p0 = ML_par + 1e-4 * np.random.randn(nwalkers, ndim)
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, LP2,
+                                        args = [gp1, gp2, x, flux])
+    for i, result in enumerate(sampler.sample(p0, iterations=nsteps)):
+        n = int((30+1) * float(i) / nsteps)
+        sys.stdout.write("\r[{0}{1}]".format('#' * n, ' ' * (30 - n)))
+    sys.stdout.write("\n")
+    print("MCMC done")
+    # find MAP parameters
+    iMAP = np.argmax(sampler.flatlnprobability)
+    MAP_par = sampler.flatchain[iMAP,:].flatten()
+    # MAP_par = np.copy(ML_par)
+    # extract MCMC chains
+    samples = sampler.chain
+    Lprob = sampler.lnprobability    
+    # convert chains back to physical units: shifts in km/s
+    samples_tpl = np.copy(samples)
+    samples_tpl[:,:,:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
+    samples_tpl[:,:,-1] *= (lw1 - lw0)
+    par_MAP = np.copy(MAP_par)
+    par_MAP[:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
+    par_MAP[-1] *= (lw1 - lw0)
+    # parameter names for plots
+    labels = []
+    for i in range(K-1):
+        labels.append(r'$\delta v_{%d}$ (km/s)' % (i+1))
+    labels.append(r'$\ln \sigma$')
+    labels.append(r'$\ln \rho$')
+    labels = np.array(labels)
+    names = []
+    for i in range(K-1):
+        names.append('dv_%d (km/s)' % (i+1))
+    names.append('ln(sig)')
+    names.append('ln(rho)')
+    names = np.array(names)
+    # Plot the chains
+    fig1 = plt.figure(figsize = (12,K+3))
+    gs1 = gridspec.GridSpec(ndim+1,1)
+    gs1.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
+    ax1 = plt.subplot(gs1[0,0])    
+    plt.setp(ax1.get_xticklabels(), visible=False)
+    plt.plot(Lprob.T, 'k-', alpha = 0.2)
+    plt.ylabel(r'$\ln P$')
+    for i in range(ndim):
+        axc = plt.subplot(gs1[i+1,0], sharex = ax1)    
+        if i < (ndim-1):
+            plt.setp(axc.get_xticklabels(), visible=False)
+        plt.plot(samples_tpl[:,:,i].T, 'k-', alpha = 0.2)
+        plt.ylabel(labels[i])
+    plt.xlim(0,nsteps)
+    plt.xlabel('iteration number')
+    # Discard burnout
+    nburn = int(raw_input('Enter no. steps to discard as burnout: '))
+    plt.axvline(nburn)
+    # Evaluate and print the parameter ranges
+    print '\n{:20s}: {:10s} {:10s} {:10s} - {:7s} + {:7s}'.format('Parameter', 'ML', 'MAP', \
+                                                                    'Median','Error','Error')
+    par50 = np.zeros(ndim)
+    par84 = np.zeros(ndim)
+    par16 = np.zeros(ndim)
+    for i in range(ndim):
+        sam = samples_tpl[:,:,i].flatten()
+        b, m, f = np.percentile(sam, [16,50,84])
+        par50[i] = m
+        par16[i] = b
+        par84[i] = f
+        print '{:20s}: {:10.5f} {:10.5f} {:10.5f} - {:7.5f} + {:7.5f}'.format(names[i], \
+                                                                                  par_ML[i], \
+                                                                                  par_MAP[i], \
+                                                                                  m, m-b, f-m)
+    if prefix is None:
+        return par_MAP, par50, par50-par16, par84-par50
+    plt.savefig('%s_chains.png' % prefix)
+    samples_flat = samples[:,nburn:,:].reshape(-1, ndim)
+    samples_tpl_flat = samples_tpl[:,nburn:,:].reshape(-1, ndim)
+    # Plot the parameter distributions
+    fig2 = corner.corner(samples_tpl_flat, truths = par_MAP, labels = labels, show_titles = True, \
+                            quantiles = [0.16, 0.84])
+    plt.savefig('%s_corner.png' % prefix)
+    # Plot the individual spectra with MAP fit
+    xpred = np.copy(x)
+    fpred, fpred_err, f1pred, f2pred = Pred2_2D(MAP_par, x, flux, flux_err, HPs, xpred = xpred)
+    lwpred = (lw1-lw0) * xpred + lw0
+    wpred = np.exp(lwpred) * 1e9
+    fig3 = plt.figure(figsize = (12,K+1))
+    gs3 = gridspec.GridSpec(K,1)
+    gs3.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
+    for i in range(K):
+        if i == 0:
+            ax1 = plt.subplot(gs3[0,0])
+        else:
+            axc = plt.subplot(gs3[i,0], sharex=ax1, sharey=ax1)
+        if i < (K-1):
+            plt.setp(ax1.get_xticklabels(), visible=False)
+        plt.plot(wpred[i,:], f1pred[i,:], 'C1')
+        plt.plot(wpred[i,:], f2pred[i,:], 'C2')
+        plt.fill_between(wpred[i,:], fpred[i,:] + 2 * fpred_err[i,:], \
+                             fpred[i,:] - fpred_err[i,:], color = 'C0', alpha = 0.4, lw = 0)
+        plt.plot(wpred[i,:], fpred[i,:], 'C0')
+        plt.ylabel('spec. %d' % (i+1))
+        plt.errorbar(wav[i,:], flux[i,:], yerr = flux_err[i,:], \
+                         fmt = ".k", ms = 3, mec = 'none', capsize = 0, alpha = 0.5, lw=0.5)
+    plt.xlim(wav.min(), wav.max())
+    plt.xlabel('wavelength (nm)')
+    plt.savefig('%s_spectra.png' % prefix)
     # # Plot the combined spectra with samples from MCMC chain
     # shifts = np.append(0,MAP_par[:K-1])
     # x1d = (x + shifts[:, None]).flatten()
@@ -559,7 +585,7 @@ def GPSpec_2Comp(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1')
     #     plt.ylabel('flux')
     # plt.xlabel('wavelength (nm)')
     # plt.savefig('%s_combined.png' % prefix)
-    # return par_MAP, par50, par50-par16, par84-par50, [fig1, fig2, fig3, fig4]
+    return par_MAP, par50, par50-par16, par84-par50, [fig1, fig2, fig3]
     
 def test2():
     plt.close('all')
@@ -574,9 +600,9 @@ def test2():
     s1 = baryvel + starvel[:,0].flatten()
     shifts[:K-1] = s1[1:]-s1[0]
     s2 = baryvel + starvel[:,1].flatten()
-    shifts[K-1:] = s2[1:]-s1[0]
+    shifts[K-1:] = s2[1:]-s2[0]
     print shifts / 1e3
-    res = GPSpec_2Comp(wav, flux, flux_err)
+    res = GPSpec_2Comp(wav, flux, flux_err, shifts_in = shifts, nsteps = 250)
     print res
     return
 
