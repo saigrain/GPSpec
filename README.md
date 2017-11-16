@@ -5,6 +5,12 @@ Interpolating spectra with GPs
 
 - **soft**: Python code
 
+- **data**: data used in the tests
+
+- **plots**: plots produced by the code on the test data
+
+## More details on the code:
+
   - `GPS_utils.py`: where all the most up-to-date code currently
     lives. There are two top-level routines: `GPSpec_1Comp` and
     `GPSpec_2Comp`, for modelling single- and double-lined spectra,
@@ -76,7 +82,3 @@ situations where `celerite` can't be used and we have to revert to
   - `test6_synth.py`: like `test5_...`, but included MCMC. Also ran on
     `synth_dataset_002` rather than `001`.
 
-
-- **data**: data used in the tests
-
-- **plots**: plots produced by the code on the test data
