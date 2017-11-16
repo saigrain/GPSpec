@@ -18,9 +18,14 @@ Interpolating spectra with GPs
     uncertainties as input, where the first index represents epoch and
     the second pixel number, plus some optional keyword arguments that
     control things like the length of the MCMC chains, the format of
-    the output plots and the names of the files they are saved in. The
-    little test routines `test1` and `test2` illustrate how to use
-    them on synthetic datasets produced by...
+    the output plots and the names of the files they are saved in. As
+    well as graphical output, the code prints the best-fit velocities,
+    and associated errors (from the MCMC) to the screen. The little
+    test routines `test1` and `test2` illustrate how to use them on
+    single- and double-lined synthetic datasets produced by the two
+    routines below. The code for the double-lined case is not quite
+    stable yet, so there are no plots saved, but the single-lined case
+    is ok, and the corresponding plots are in `../plots/synth2*.png`
 
   - `simulate_dataset.py`: generates a time-series of single-lined
     spectra with random velocity shifts. Produced files
@@ -74,6 +79,4 @@ situations where `celerite` can't be used and we have to revert to
 
 - **data**: data used in the tests
 
-- **plots**: contains some of the plots produced by the early version
-  of the code (`test*.py`) -- I have not been saving the plots
-  produced by the latest version. 
+- **plots**: plots produced by the code on the test data
