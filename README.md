@@ -45,6 +45,10 @@ likelihood separately for each segment, particularly if we encounter
 situations where `celerite` can't be used and we have to revert to
 `george`.
 
+  - `test_simulated.py`: the very first go I had at doing this,
+    including simulating spectra, degrading their resolution, and then
+    trying to model them.
+	
   - `test2_HD127334.py`: example code modelling HARPS-N spectra of
      HD127334. Works by modelling all the spectra as a single
      realisation of a Matern32 GP with free log wavelength shifts

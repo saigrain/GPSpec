@@ -537,7 +537,8 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
         plt.ylabel('spec. %d' % (i+1))
         plt.errorbar(wav[i,:], flux[i,:], yerr = flux_err[i,:], \
                          fmt = ".k", ms = 3, mec = 'none', capsize = 0, alpha = 0.5, lw=0.5)
-    plt.xlim(wav.min(), wav.max())
+
+        plt.xlim(wav.min(), wav.max())
     plt.xlabel('wavelength (nm)')
     plt.savefig('%s_spectra.png' % prefix)
     # # Plot the combined spectra with samples from MCMC chain
