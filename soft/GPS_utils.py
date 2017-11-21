@@ -310,7 +310,7 @@ def GPSpec_1Comp(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1')
     
 def test1():
     plt.close('all')
-    d = siom.loadmat('/Users/aigrain/Soft/GPSpec/data/synth_dataset_002.mat')
+    d = siom.loadmat('../data/synth_dataset_002.mat')
     wav = d['wavelength'] * 0.1
     flux = d['flux']
     flux_err = d['error']
@@ -397,7 +397,7 @@ def Pred2_2D(par, gp1, gp2, x2d, y2d, y2derr, xpred = None):
     std = np.sqrt(var).reshape(xpred.shape)
     return mu+1, std, mu1+1, mu2+1
 
-def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 3, prefix = 'RR1'):
+def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 3, prefix = 'RR2'):
     # NB: input wavelengths should be in nm, flux continuum should be about 1
     K, N = wav.shape
     # Create 2-D array of scaled log wavelengths for fitting
@@ -606,7 +606,7 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
 
 def test2():
     plt.close('all')
-    d = siom.loadmat('/Users/aigrain/Soft/GPSpec/data/synth_dataset_003.mat')
+    d = siom.loadmat('../data/synth_dataset_003.mat')
     wav = d['wavelength'] * 0.1
     K,N = wav.shape
     flux = d['flux']
@@ -619,7 +619,7 @@ def test2():
     s2 = baryvel + starvel[:,1].flatten()
     shifts[K-1:] = s2[1:]-s2[0]
     print shifts / 1e3
-    res = GPSpec_2Comp(wav, flux, flux_err, shifts_in = shifts, nsteps = 100)
+    res = GPSpec_2Comp(wav, flux, flux_err, shifts_in = shifts, nsteps = 100, prefix = 'synth3')
     return
 
 ####################################################################################

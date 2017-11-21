@@ -6,7 +6,7 @@ from time import time as clock
 import scipy.io as sio
 
 SPEED_OF_LIGHT = 2.99796458e8
-nmax = 4096
+nmax = 1000
 
 ###################
 # read in spectra #
@@ -21,17 +21,11 @@ err = d['error']
 # work on subset only for now #
 ###############################
 print 'Selecting subset'
-ifl = np.array([0,7,14,21,28])
-# ifl = np.arange(35).astype(int)
+ifl = np.arange(35).astype(int)
 nfl = len(ifl)
 wav = wav[ifl,:]
 flux = flux[ifl,:]
 err = err[ifl,:]
-# ipix = np.r_[1000:2000].astype(int)
-# npix = len(ipix)
-# wav = wav[:,ipix]
-# flux = flux[:,ipix]
-# err = err[:,ipix]
 npix = len(wav[0,:].flatten())
 
 baryvel = np.zeros(nfl)
@@ -99,16 +93,16 @@ inline = np.zeros(flux.shape, 'bool')
 thresh = 0.9
 for i in range(nfl):
     inline[i,:] = flux[i,:] < thresh
-    print inline[i,:].sum()
-
+    l = np.where(flux[i,:] >= thresh)[0]
+    np.random.shuffle(l)
+    l = l[:len(l)/10]
+    inline[i,l] = True
 t0 = clock()
 
 a0 = 0.19
 r0 = 0.24
 kernel = a0**2 * george.kernels.Matern32Kernel(r0**2)
 gp = george.GP(kernel, mean = 1.0, solver = george.hodlr.HODLRSolver)
-print kernel.pars
-print np.sqrt(kernel.pars)
 
 lwav_shift = np.copy(lwav_corr)
 wav_shift = np.copy(wav_corr)
@@ -127,16 +121,18 @@ def lnprob2(p):
     lnprior = -0.5 * npar * np.log(2*np.pi) \
       - 0.5 * npar * np.log(sigma_prior) \
       - (p**2/2./sigma_prior**2).sum()
-    pp = np.append(p, -p.sum())
-    dlw = pp / SPEED_OF_LIGHT
+    dlw = p / SPEED_OF_LIGHT
     x = []
     y = []
     e = []
-    for i in range(npar+1):
-        lws = lwav_corr[i,inline[i,:]] + dlw[i]
+    x.append(wav_corr[0,inline[0,:]])
+    y.append(flux[0,inline[0,:]])
+    e.append(err[0,inline[0,:]])
+    for i in range(npar):
+        lws = lwav_corr[i+1,inline[i+1,:]] + dlw[i]
         x.append(np.exp(lws) * 1e10)
-        y.append(flux[i,inline[i,:]])
-        e.append(err[i,inline[i,:]])
+        y.append(flux[i+1,inline[i+1,:]])
+        e.append(err[i+1,inline[i+1,:]])
     x = np.array([item for sublist in x for item in sublist])
     y = np.array([item for sublist in y for item in sublist])
     e = np.array([item for sublist in e for item in sublist])
@@ -158,42 +154,37 @@ def lnprob2(p):
         lnlike += gp.lnlikelihood(yy, quiet = True)
     return lnprior + lnlike
 
-nwalkers, ndim = 32, nfl-1
+nwalkers, ndim = 72, nfl-1
 p0 = [np.zeros(ndim) + 10.0 * np.random.randn(ndim) for i in range(nwalkers)]
 sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob2, threads=8)
 
 print 'running MCMC on velocities: burn in...'
-nburn = 100
+nburn = 50
 nstep = 500
 p0, _, _ = sampler.run_mcmc(p0, nburn)
 print 'production run...'
 p0, _, _ = sampler.run_mcmc(p0, nstep)
-samp = sampler.chain
-samples = np.zeros((nwalkers,nstep,ndim+1))
-samples[:,:,:ndim] = samp[:,nburn:,:]
-for i in range(nwalkers):
-    for j in range(nstep):
-        samples[i,j,-1] = samp[i,nburn+j,:].sum()
+samples = sampler.chain[:,nburn:,:]
 
 # plot chain 
-pl.figure(figsize = (6,(ndim+1)/2.))
-for i in range(ndim+1):
-    pl.subplot(ndim+1, 1, i+1)
+pl.figure(figsize = (6,ndim))
+for i in range(ndim):
+    pl.subplot(ndim, 1, i+1)
     for j in range(nwalkers):
         pl.plot(samples[j,:,i], 'k-', alpha=0.3)
 pl.savefig('../plots/rollsRoyce_synth_chain.png')
 
 # corner plot
-samples = samples.reshape(-1,ndim+1)
+samples = samples.reshape(-1,ndim)
 corner.corner(samples, show_titles=True, title_args={"fontsize": 12})
 pl.savefig('../plots/rollsRoyce_synth_triangle.png')
 
 # print 16, 50 and 84 percentile values
 vals = map(lambda v: (v[1], v[2]-v[1], v[1]-v[0]), \
            zip(*np.percentile(samples, [16, 50, 84], axis=0)))
-p = np.zeros(ndim+1)
-for i in range(ndim+1):
-    print 'delta v(%d-0) = %.3f + %.3f -%.3f' % \
+p = np.zeros(ndim)
+for i in range(ndim):
+    print 'dv(%d-0) = %.3f + %.3f -%.3f' % \
       (i+1, vals[i][0],vals[i][1],vals[i][2])
     p[i] = vals[i][0]
 
@@ -205,6 +196,9 @@ dlw = p / SPEED_OF_LIGHT
 x = []
 y = []
 e = []
+x.append(wav_corr[0,inline[0,:]])
+y.append(flux[0,inline[0,:]])
+e.append(err[0,inline[0,:]])
 for i in range(nfl):
     lws = lwav_corr[i,inline[i,:]] + dlw[i]
     x.append(np.exp(lws) * 1e10)
@@ -221,14 +215,20 @@ gp.compute(x, yerr = e)
 wav_mu = np.r_[wav.min():wav.max():1001j]
 mu, cov = gp.predict(y, wav_mu)
 mu_err = np.sqrt(np.diag(cov))
+mu2 = gp.predict(y, x, mean_only = True)
 
-pl.figure()
-pl.plot(wav_shift.T, flux.T, '.')
-pl.plot(wav_shift[inline].flatten(), flux[inline].flatten(), \
-        'o', c = 'none', mec = 'k')
+pl.figure(figsize=(8,6))
+ax1 = pl.subplot(211)
+pl.plot(x, y, 'k.')
 pl.plot(wav_mu, mu, 'k-')
 pl.fill_between(wav_mu, mu + 2 * mu_err, mu - 2 * mu_err, color = 'k', \
                 alpha = 0.4)
+ax2 = pl.subplot(212,sharex = ax1)
+pl.plot(x, y-m2, 'k.')
+pl.plot(wav_mu, mu-mu, 'k-')
+pl.fill_between(wav_mu, 2 * mu_err, 2 * mu_err, color = 'k', \
+                alpha = 0.4)
+pl.xlim(wav_mu.min(), wav_mu.max())
 pl.savefig('../plots/rollsRoyce_synth_spec.png')
 
 t2 = clock()
