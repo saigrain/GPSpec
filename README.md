@@ -29,9 +29,9 @@ Interpolating spectra with GPs
     and associated errors (from the MCMC) to the screen. The little
     test routines `test1` and `test2` illustrate how to use them on
     single- and double-lined synthetic datasets produced by the two
-    routines below. The code for the double-lined case is not quite
-    stable yet, so there are no plots saved, but the single-lined case
-    is ok, and the corresponding plots are in `../plots/synth2*.png`
+    routines below. The plots are in `../plots/synth2*.png` and
+    `../plots/synth3*.png` for the single and double-lined cases,
+    respectively.
 
   - `simulate_dataset.py`: generates a time-series of single-lined
     spectra with random velocity shifts. Produced files

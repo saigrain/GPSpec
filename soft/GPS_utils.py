@@ -26,7 +26,8 @@ def Fit0(x, y, yerr, verbose = True, doPlot = False, \
     k = terms.Matern32Term(log_sigma = 0.0, log_rho = 0.0)
     gp = GP(k, mean = 1.0)
     gp.compute(x, yerr = yerr)
-    soln = minimize(NLL0, gp.get_parameter_vector(), jac=True, args=(gp,y))
+    HP_init = gp.get_parameter_vector()
+    soln = minimize(NLL0, HP_init, jac=True, args=(gp,y))
     gp.set_parameter_vector(soln.x)
     if verbose:
         print 'Initial pars:', HP_init
@@ -423,9 +424,8 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
     if shifts_in is None:
         shifts_in = np.zeros(2*(K-1))
     par_in = shifts_in / SPEED_OF_LIGHT / (lw1-lw0)
-    # ML_par = np.array(Fit2(x, flux, gp1, gp2, verbose = False, par_in = par_in))
-    ML_par = np.copy(par_in)
-    par_ML = np.copy(ML_par)
+    ML_par = np.array(Fit2(x, flux, gp1, gp2, verbose = False, par_in = par_in))
+     par_ML = np.copy(ML_par)
     par_ML *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
     print "ML fit done"
     # MCMC
@@ -483,8 +483,7 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
     plt.xlim(0,nsteps)
     plt.xlabel('iteration number')
     # Discard burnout
-    # nburn = int(raw_input('Enter no. steps to discard as burnout: '))
-    nburn = 0
+    nburn = int(raw_input('Enter no. steps to discard as burnout: '))
     plt.axvline(nburn)
     # Evaluate and print the parameter ranges
     print '\n{:20s}: {:10s} {:10s} {:10s} - {:7s} + {:7s}'.format('Parameter', 'ML', 'MAP', \
@@ -552,11 +551,14 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
     y1derr = flux_err.flatten()
     Ktot = K1 + K2 + np.diag(y1derr**2)
     y1d = flux.flatten() - 1.0
+    y11d = (flux-f2pred).flatten() + 1
+    y21d = (flux-f1pred).flatten() + 1
+    offset = 1.5 * (y11d.min() - 1)
     L = sla.cho_factor(Ktot)
     b = sla.cho_solve(L, y1d)
-    fig4 = plt.figure(figsize = (12,nrange+1))
+    fig4 = plt.figure(figsize = (12,2*nrange+1))
     gs4 = gridspec.GridSpec(nrange,1)
-    gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.05)
+    gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.15)
     ws = min(w11d.min(), w21d.min())
     wr = (max(w11d.max(),w21d.max())-ws) / float(nrange)
     for i in range(nrange):
@@ -564,15 +566,13 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
             ax1 = plt.subplot(gs4[0,0])
         else:
             axc = plt.subplot(gs4[i,0], sharey=ax1)
-        if i < (nrange-1):
-            plt.setp(ax1.get_xticklabels(), visible=False)
         wmin = ws + (i - 0.05) * wr
         wmax = ws + (i + 1.05) * wr
         l = (w11d >= wmin) * (w11d <= wmax)
-        plt.errorbar(w11d[l], y1d[l], yerr = y1derr[l], fmt = ".k", capsize = 0, \
+        plt.errorbar(w11d[l], y11d[l], yerr = y1derr[l], fmt = ".k", capsize = 0, \
                          alpha = 0.5, ms = 2, mec='none')
         l = (w21d >= wmin) * (w21d <= wmax)
-        plt.errorbar(w21d[l], y2d[l] - 1, yerr = y1derr[l], fmt = ".k", capsize = 0, \
+        plt.errorbar(w21d[l], y21d[l] + offset, yerr = y1derr[l], fmt = ".k", capsize = 0, \
                          alpha = 0.5, ms = 2, mec='none')
         wpred = np.linspace(wmin, wmax, 1000)
         lwpred = np.log(wpred * 1e-9)
@@ -584,20 +584,22 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
             x1pred = (xpred + s1[:, None]).flatten()
             lw1pred = (lw1-lw0) * x1pred + lw0
             w1pred = np.exp(lw1pred) * 1e9
-            K1s = gp1.get_matrix(x1pred, x1)
+            K1s = gp1.get_matrix(x1pred, x11d)
             s2 = samp_params[K-1:]
             x2pred = (xpred + s2[:, None]).flatten()
             lw2pred = (lw1-lw0) * x2pred + lw0
             w2pred = np.exp(lw2pred) * 1e9
-            K2s = gp2.get_matrix(x2pred, x2)
+            K2s = gp2.get_matrix(x2pred, x21d)
             Ks = K1s + K2s
             K1ss = gp1.get_matrix(x1pred)
             K2ss = gp2.get_matrix(x2pred)
             Kss = K1ss + K2ss
-            mu1 = np.dot(K1s, b).reshape(xpred.shape)
-            mu2 = np.dot(K2s, b).reshape(xpred.shape)
-            plt.plot(w1pred, mu1, 'C0-', lw = 0.5, alpha = 0.5)
-            plt.plot(w2pred, mu2-1, 'C1-', lw = 0.5, alpha = 0.5)
+            mu1 = np.dot(K1s, b).reshape(x1pred.shape) + 1
+            mu2 = np.dot(K2s, b).reshape(x2pred.shape) + 1
+            inds1 = np.argsort(w1pred)
+            plt.plot(w1pred[inds1], mu1[inds1], 'C0-', lw = 0.5, alpha = 0.5)
+            inds2 = np.argsort(w2pred)
+            plt.plot(w2pred[inds2], mu2[inds2] + offset, 'C1-', lw = 0.5, alpha = 0.5)
         plt.xlim(wmin, wmax)
         plt.ylabel('flux')
     plt.xlabel('wavelength (nm)')
@@ -619,7 +621,7 @@ def test2():
     s2 = baryvel + starvel[:,1].flatten()
     shifts[K-1:] = s2[1:]-s2[0]
     print shifts / 1e3
-    res = GPSpec_2Comp(wav, flux, flux_err, shifts_in = shifts, nsteps = 100, prefix = 'synth3')
+    res = GPSpec_2Comp(wav, flux, flux_err, shifts_in = shifts, nsteps = 2000, prefix = '../plots/synth3')
     return
 
 ####################################################################################
