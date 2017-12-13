@@ -22,11 +22,12 @@ def NLL0(p, gp, y):
     return -g[0], -g[1]
 
 def Fit0(x, y, yerr, verbose = True, doPlot = False, \
-             xpred = None):
-    k = terms.Matern32Term(log_sigma = 0.0, log_rho = 0.0)
+             xpred = None, HP_init = None):
+    if HP_init is None:
+        HP_init = np.zeros(2)
+    k = terms.Matern32Term(log_sigma = HP_init[0], log_rho = HP_init[1])
     gp = GP(k, mean = 1.0)
     gp.compute(x, yerr = yerr)
-    HP_init = gp.get_parameter_vector()
     soln = minimize(NLL0, HP_init, jac=True, args=(gp,y))
     gp.set_parameter_vector(soln.x)
     if verbose:
@@ -42,12 +43,17 @@ def Fit0(x, y, yerr, verbose = True, doPlot = False, \
         plt.fill_between(xpred, mu + std, mu - std,  color = 'C0', alpha = 0.4, lw = 0)
     return soln.x, mu, std
 
-def Fit0_Jitter(x, y, yerr, verbose = True, doPlot = False, \
+def Fit0_Jitter(x, y, yerr = None, verbose = True, doPlot = False, \
                     xpred = None):
     k = terms.Matern32Term(log_sigma = 0.0, log_rho = 0.0)
-    k += terms.JitterTerm(log_sigma = np.log(np.median(yerr)))
+    if yerr is None:
+        wn = np.median(abs(np.diff(y)))
+    else:
+        wn = np.median(yerr)
+    k += terms.JitterTerm(log_sigma = np.log(wn))
     gp = GP(k, mean = 1.0)
     gp.compute(x)
+    HP_init = gp.get_parameter_vector()
     soln = minimize(NLL0, gp.get_parameter_vector(), jac=True, args=(gp,y))
     gp.set_parameter_vector(soln.x)
     if verbose:
@@ -57,9 +63,6 @@ def Fit0_Jitter(x, y, yerr, verbose = True, doPlot = False, \
         return soln.x
     mu, var = gp.predict(y, xpred, return_var = True)
     std = np.sqrt(var)
-    print xpred.shape
-    print mu.shape
-    print std.shape
     if doPlot:
         plt.errorbar(x, y, yerr = yerr, fmt = ".k", capsize = 0)
         plt.plot(xpred, mu, 'C0')
@@ -111,16 +114,17 @@ def Pred1_2D(par, x2d, y2d, y2derr, doPlot = True, x2dpred = None):
     gp.compute(x1d[inds], yerr = y1derr[inds])
     if x2dpred is None:
         x2dpred = np.copy(x2d)
-    x1dpred = (x2dpred + shifts[:, None]).flatten()
-    indspred = np.argsort(x1dpred)
-    mu, var = gp.predict(y1d[inds], x1dpred[indspred], return_var = True)
-    std = np.sqrt(var)
-    y1dpred = np.zeros_like(x1dpred)
-    y1dpred[indspred] = mu
-    y1dprederr = np.zeros_like(x1dpred)
-    y1dprederr[indspred] = std
-    y2dpred = y1dpred.reshape(x2dpred.shape)
-    y2dprederr = y1dprederr.reshape(x2dpred.shape)    
+    x2dpreds = (x2dpred + shifts[:, None])
+    y2dpred = np.zeros_like(x2dpred)
+    y2dprederr = np.zeros_like(x2dpred)
+    for k in range(K):
+        print 'Prediction for spectrum %d' % (k+1)
+        x1dpred = x2dpreds[k,:].flatten()
+        indspred = np.argsort(x1dpred)
+        mu, var = gp.predict(y1d[inds], x1dpred[indspred], return_var = True)
+        std = np.sqrt(var)
+        y2dpred[k,indspred] = mu
+        y2dprederr[k,indspred] = std
     if doPlot:
         for i in range(K):
             plt.errorbar(x2d[i,:], y2d[i,:] - i, yerr = y2derr[i,:], fmt = ".k", capsize = 0, alpha = 0.5)
