@@ -80,7 +80,7 @@ def LP1(p, gp, x2d, y2d, y2derr):
     y1derr = y2derr.flatten()
     try:
         gp.compute(x1d[inds], yerr = y1derr[inds])
-    except LinAlgError:
+    except:
         return -np.inf
     return gp.log_likelihood(y1d[inds], quiet=True)
 
@@ -221,7 +221,7 @@ def GPSpec_1Comp(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1')
     par84 = np.zeros(ndim)
     par16 = np.zeros(ndim)
     for i in range(ndim):
-        sam = samples_tpl[:,:,i].flatten()
+        sam = samples_tpl[:,nburn:,i].flatten()
         b, m, f = np.percentile(sam, [16,50,84])
         par50[i] = m
         par16[i] = b
@@ -425,7 +425,7 @@ def GPSpec_2Comp(wav, flux, flux_err, shifts_in = None, nsteps = 2000, nrange = 
         shifts_in = np.zeros(2*(K-1))
     par_in = shifts_in / SPEED_OF_LIGHT / (lw1-lw0)
     ML_par = np.array(Fit2(x, flux, gp1, gp2, verbose = False, par_in = par_in))
-     par_ML = np.copy(ML_par)
+    par_ML = np.copy(ML_par)
     par_ML *= (lw1 - lw0) * SPEED_OF_LIGHT * 1e-3
     print "ML fit done"
     # MCMC
