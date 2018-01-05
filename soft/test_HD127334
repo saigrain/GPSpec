@@ -1,0 +1,266 @@
+#!/usr/bin/env python
+import numpy as np
+import matplotlib.pyplot as pl
+import glob
+import GPS_utils as u
+import scipy.io.matlab as siom
+from time import time as clock
+from celerite import terms, GP
+import emcee, sys, corner
+import matplotlib.gridspec as gridspec
+from argparse import ArgumentParser
+
+SPEED_OF_LIGHT = 2.99796458e8 # in m.s
+
+ln_sig_med = -1.65
+ln_sig_err = 0.06 * 2
+ln_rho_med = -5.49
+ln_rho_err = 0.04 * 2
+
+def log_prior(p):
+    lp = 0.0
+    lp -= np.log(ln_sig_err) + \
+        0.5 * (np.log(2 * np.pi) + ((p[-2]-ln_sig_med)/ln_sig_err)**2)
+    lp -= np.log(ln_rho_err) + \
+        0.5 * (np.log(2 * np.pi) + ((p[-1]-ln_rho_med)/ln_rho_err)**2)
+    return lp
+
+def log_posterior(p, gp, x2d, y2d, y2derr):
+    return log_prior(p) + u.LP1(p, gp, x2d, y2d, y2derr)
+
+def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 'RR1', nrange = 10):
+    K, N = wav.shape
+    lwav = np.log(wav * 1e-9) # in m
+    lw0, lw1 = lwav.min(), lwav.max()
+    x = (lwav-lw0) / (lw1-lw0)
+    HPs = np.array([ln_sig_med, ln_rho_med])
+    par_in = np.concatenate([np.zeros(K-1),HPs])
+    print 'Initial parameters:', par_in
+    print "Starting MCMC"
+    ndim = K+1
+    nwalkers = ndim * 4
+    sn = np.random.randn(nwalkers, ndim)
+    sn[:,:-2] *= 1e-6
+    sn[:,-2] *= ln_sig_err
+    sn[:,-1] *= ln_rho_err
+    p0 = par_in + sn
+    k = terms.Matern32Term(log_sigma = par_in[-2], log_rho = par_in[-1])
+    gp = GP(k, mean = 1.0)
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, log_posterior,
+                                        args = [gp, x, flux, flux_err])
+    for i, result in enumerate(sampler.sample(p0, iterations=nsteps)):
+        n = int((30+1) * float(i) / nsteps)
+        sys.stdout.write("\r[{0}{1}]".format('#' * n, ' ' * (30 - n)))
+    sys.stdout.write("\n")
+    print("MCMC done")
+    # find MAP parameters
+    iMAP = np.argmax(sampler.flatlnprobability)
+    MAP_par = sampler.flatchain[iMAP,:].flatten()
+    # extract MCMC chains
+    samples = sampler.chain
+    Lprob = sampler.lnprobability    
+    # convert chains back to physical units: shifts in m/s
+    samples_tpl = np.copy(samples)
+    samples_tpl[:,:,:K-1] *= (lw1-lw0)* SPEED_OF_LIGHT
+    par_MAP = np.copy(MAP_par)
+    par_MAP[:K-1] *= (lw1-lw0)*SPEED_OF_LIGHT
+    # parameter names for plots
+    labels = []
+    for i in range(K-1):
+        labels.append(r'$\delta v_{%d}$ (m/s)' % (i+1))
+    labels.append(r'$\ln \sigma$')
+    labels.append(r'$\ln \rho (m)$')
+    labels = np.array(labels)
+    names = []
+    for i in range(K-1):
+        names.append('dv_%d (m/s)' % (i+1))
+    names.append('ln(sig)')
+    names.append('ln(rho) (m)')
+    names = np.array(names)
+    # Plot the chains
+    fig1 = pl.figure(figsize = (12,K+3))
+    gs1 = gridspec.GridSpec(ndim+1,1)
+    gs1.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
+    ax1 = pl.subplot(gs1[0,0])
+    axs = [ax1]
+    pl.setp(ax1.get_xticklabels(), visible=False)
+    pl.plot(Lprob.T, 'k-', alpha = 0.2)
+    pl.ylabel(r'$\ln P$')
+    for i in range(ndim):
+        axc = pl.subplot(gs1[i+1,0], sharex = ax1)
+        axs.append(axc)
+        if i < (ndim-1):
+            pl.setp(axc.get_xticklabels(), visible=False)
+        pl.plot(samples_tpl[:,:,i].T, 'k-', alpha = 0.2)
+        pl.ylabel(labels[i])
+    pl.xlim(0,nsteps)
+    pl.xlabel('iteration number')
+    # Discard burnout
+    nburn = int(0.25*nsteps)
+    for ax in axs:
+        ax.axvline(nburn)
+    pl.savefig('../plots/%s_chains.png' % prefix)
+    # Evaluate and print the parameter ranges
+    print '\n{:20s}: {:10s} {:10s} {:10s} - {:7s} + {:7s}'.format('Parameter', 'ML', 'MAP', \
+                                                                    'Median','Error','Error')
+    par50 = np.zeros(ndim)
+    par84 = np.zeros(ndim)
+    par16 = np.zeros(ndim)
+    for i in range(ndim):
+        sam = samples_tpl[:,:,i].flatten()
+        b, m, f = np.percentile(sam, [16,50,84])
+        par50[i] = m
+        par16[i] = b
+        par84[i] = f
+        print '{:20s}: {:10.5f} {:10.5f} - {:7.5f} + {:7.5f}'.format(names[i], par_MAP[i], m, m-b, f-m)
+    samples_flat = samples[:,nburn:,:].reshape(-1, ndim)
+    samples_tpl_flat = samples_tpl[:,nburn:,:].reshape(-1, ndim)
+    # Plot the parameter distributions
+    fig2 = corner.corner(samples_tpl_flat, truths = par_MAP, labels = labels, show_titles = True, \
+                            quantiles = [0.16, 0.84])
+    pl.savefig('../plots/%s_corner.png' % prefix)
+    # Evaluate MAP fit
+    xpred, fpred, fpred_err = u.Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
+    lwpred = (lw1-lw0) * xpred + lw0
+    wpred = np.exp(lwpred) * 1e9
+    # Plot the combined spectra with samples from MCMC chain
+    shifts = np.append(0,MAP_par[:K-1])
+    x1d = (x + shifts[:, None]).flatten()
+    lw1d = (lw1-lw0) * x1d + lw0
+    w1d = np.exp(lw1d) * 1e9
+    y1d = flux.flatten()
+    y1derr = flux_err.flatten()
+    specno = np.zeros((K,N),'int')
+    for k in range(K):
+        specno[k,:] = k
+    s1d = specno.flatten()
+    inds = np.argsort(x1d)
+    gp.set_parameter_vector(MAP_par[-2:])
+    gp.compute(x1d[inds], yerr = y1derr[inds])
+    fig4 = pl.figure(figsize = (16,nrange*2+1))
+    gs4 = gridspec.GridSpec(nrange,1)
+    gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.1)
+    ws = w1d.min()
+    wr = (w1d.max()-ws) / float(nrange)
+    for i in range(nrange):
+        if i == 0:
+            ax1 = pl.subplot(gs4[0,0])
+        else:
+            axc = pl.subplot(gs4[i,0], sharey=ax1)
+        if i < (nrange-1):
+            pl.setp(ax1.get_xticklabels(), visible=False)
+        wmin = ws + (i - 0.05) * wr
+        wmax = ws + (i + 1.05) * wr
+        l = (w1d >= wmin) * (w1d <= wmax)
+        for k in range(K):
+            ll = l * (s1d == k)
+            c = k % 10
+            pl.plot(w1d[ll], y1d[ll], ".C%d" % c, alpha = 0.5, ms = 4, mec='none')
+        wpred = np.linspace(wmin, wmax, 1000)
+        lwpred = np.log(wpred * 1e-9)
+        xpred = (lwpred-lw0)/(lw1-lw0)
+        isamp = np.random.randint(nsteps-nburn, size=10)
+        for j in isamp:
+            samp_params = samples_flat[j,:].flatten()
+            samp_shifts = np.append(0, samp_params[:K-1])
+            x1_samp = (x + samp_shifts[:, None]).flatten()
+            inds_samp = np.argsort(x1_samp)
+            k_samp = terms.Matern32Term(log_sigma=samp_params[-2],log_rho=samp_params[-1])
+            gp_samp = GP(k_samp, mean=1.)
+            gp_samp.compute(x1_samp[inds_samp], yerr = y1derr[inds_samp])
+            mu, _ = gp.predict(y1d[inds_samp], xpred, return_var = True)
+            pl.plot(wpred, mu, 'k-', alpha = 0.5, lw = 0.5)
+        pl.xlim(wmin, wmax)
+        pl.ylabel('flux')
+    pl.xlabel('wavelength (nm)')
+    pl.savefig('../plots/%s_spectra.png' % prefix)
+
+    return par_MAP, par50, par50-par16, par84-par50
+
+if __name__ == '__main__':
+    ap = ArgumentParser()
+    ap.add_argument('k', type=int, help='no spectra (2 to 128)')
+    ap.add_argument('--noise', default = 0, type=float, help='noise to add (%)')
+    args = ap.parse_args()
+    # find spectra
+    datadir = '../data/HD127334_HARPSN/'
+    spectra = np.sort(glob.glob('%s*spec.txt' % datadir))
+    blaze_files = np.sort(glob.glob('%s*spec.blaze.txt' % datadir))
+    K = len(spectra)
+    # select subset
+    k = args.k
+    print 'Using %d spectra' % k
+    indices = np.arange(K)
+    np.random.shuffle(indices)
+    ii = indices[:k]
+    print 'Using spectra: ', ii
+    spectra = spectra[ii]
+    blaze_files = blaze_files[ii]
+    # read in selected spectra
+    baryvel = np.zeros(k)
+    bjd = np.zeros(k)
+    for i in np.arange(k):
+        w, f = np.genfromtxt(spectra[i],skip_header=10).T
+        b = np.genfromtxt(blaze_files[i]).T[1]
+        if i == 0:
+            N = len(f)
+            wav = np.zeros((k,N))
+            flux = np.zeros((k, N))
+            blaze = np.zeros((k, N))
+        wav[i,:] = w
+        flux[i,:] = f
+        blaze[i,:] = b
+        f = open(spectra[i])
+        r = 0
+        # also read in barycentric velocity correction
+        while (r < 2):
+            w = f.readline().split()
+            if w[0] == 'WS_BARY:':
+                baryvel[i] = float(w[1])
+                r += 1
+            if w[0] == 'WS_BJD:':
+                bjd[i] = float(w[1])
+                r += 1
+        f.close()
+    # compute photon noise errors & wavelength offset, normalise spectra
+    flux_err = np.sqrt(flux/1.4)
+    flux /= b
+    flux_err /= b
+    lwav = np.log(wav * 1e-10) # input wavelengths are in Angstrom
+    dlw = baryvel / 2.99796458e8 # in m
+    wav_rest = np.copy(wav)
+    for i in np.arange(k):
+        s = np.argsort(flux[i,:].flatten())
+        m = flux[i,s[int(0.98*N)]]
+        flux[i,:] /= m
+        flux_err[i,:] /= m
+        wav_rest[i,:] = np.exp(lwav[i,:] + dlw[i]) * 1e-9 # my code wants wavelengths in nm
+    # add more noise if needed
+    if args.noise > 0:
+        add_sig = flux * args.noise * 0.01
+        add_noise = np.random.randn(k,N) * add_sig
+        flux += add_noise
+        flux_err = np.sqrt(flux_err**2 + add_sig**2) 
+    # Do MCMC
+    prefix = 'HD127334_%03d_%03d' % (k, int(args.noise))
+    t0 = clock()
+    res = do_MCMC(wav_rest, flux, flux_err, \
+                      nsteps = 2000, prefix = prefix)
+    t1 = clock()
+    print 'Time taken: %ds.' % int(t1-t0)
+    # Save results for this run
+    X = np.zeros((4,len(res[0])))
+    X[0] = res[0]
+    X[1] = res[1]
+    X[2] = res[2]
+    X[3] = res[3]
+    np.savetxt('../data/%s.dat' % prefix, X.T)
+    
+    t = int(t1-t0)
+    rms = np.sqrt(np.mean(res[1][:-2]**2))
+    err = np.median(0.5*(res[2][:-2]+res[3][:-2]))
+    str = '%d %d %d %.3f %.3f\n' % (k, int(args.noise*100), t, rms, err)
+    print str
+    f = open('../data/HD127334_N.dat','aw')
+    f.write(str)
+    f.close()
