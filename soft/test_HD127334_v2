@@ -119,67 +119,69 @@ def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 'RR1', nrange = 10):
     fig2 = corner.corner(samples_tpl_flat, truths = par_MAP, labels = labels, show_titles = True, \
                             quantiles = [0.16, 0.84])
     pl.savefig('/users/suz/soft/GPSpec/plots/%s_corner.png' % prefix)
-    # # Evaluate MAP fit
-    # xpred, fpred, fpred_err = u.Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
-    # lwpred = (lw1-lw0) * xpred + lw0
-    # wpred = np.exp(lwpred) * 1e9
-    # # Plot the combined spectra with samples from MCMC chain
-    # shifts = np.append(0,MAP_par[:K-1])
-    # x1d = (x + shifts[:, None]).flatten()
-    # lw1d = (lw1-lw0) * x1d + lw0
-    # w1d = np.exp(lw1d) * 1e9
-    # y1d = flux.flatten()
-    # y1derr = flux_err.flatten()
-    # specno = np.zeros((K,N),'int')
-    # for k in range(K):
-    #     specno[k,:] = k
-    # s1d = specno.flatten()
-    # inds = np.argsort(x1d)
-    # gp.set_parameter_vector(MAP_par[-2:])
-    # gp.compute(x1d[inds], yerr = y1derr[inds])
-    # fig4 = pl.figure(figsize = (16,nrange*2+1))
-    # gs4 = gridspec.GridSpec(nrange,1)
-    # gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.1)
-    # ws = w1d.min()
-    # wr = (w1d.max()-ws) / float(nrange)
-    # for i in range(nrange):
-    #     if i == 0:
-    #         ax1 = pl.subplot(gs4[0,0])
-    #     else:
-    #         axc = pl.subplot(gs4[i,0], sharey=ax1)
-    #     if i < (nrange-1):
-    #         pl.setp(ax1.get_xticklabels(), visible=False)
-    #     wmin = ws + (i - 0.05) * wr
-    #     wmax = ws + (i + 1.05) * wr
-    #     l = (w1d >= wmin) * (w1d <= wmax)
-    #     for k in range(K):
-    #         ll = l * (s1d == k)
-    #         c = k % 10
-    #         pl.plot(w1d[ll], y1d[ll], ".C%d" % c, alpha = 0.5, ms = 4, mec='none')
-    #     wpred = np.linspace(wmin, wmax, 1000)
-    #     lwpred = np.log(wpred * 1e-9)
-    #     xpred = (lwpred-lw0)/(lw1-lw0)
-    #     isamp = np.random.randint(nsteps-nburn, size=10)
-    #     for j in isamp:
-    #         samp_params = samples_flat[j,:].flatten()
-    #         samp_shifts = np.append(0, samp_params[:K-1])
-    #         x1_samp = (x + samp_shifts[:, None]).flatten()
-    #         inds_samp = np.argsort(x1_samp)
-    #         k_samp = terms.Matern32Term(log_sigma=samp_params[-2],log_rho=samp_params[-1])
-    #         gp_samp = GP(k_samp, mean=1.)
-    #         gp_samp.compute(x1_samp[inds_samp], yerr = y1derr[inds_samp])
-    #         mu, _ = gp.predict(y1d[inds_samp], xpred, return_var = True)
-    #         pl.plot(wpred, mu, 'k-', alpha = 0.5, lw = 0.5)
-    #     pl.xlim(wmin, wmax)
-    #     pl.ylabel('flux')
-    # pl.xlabel('wavelength (nm)')
-    # pl.savefig('/users/suz/soft/GPSpec/plots/%s_spectra.png' % prefix)
-
+    if nrange == 0:
+        return par_MAP, par50, par50-par16, par84-par50
+    # Evaluate MAP fit
+    xpred, fpred, fpred_err = u.Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
+    lwpred = (lw1-lw0) * xpred + lw0
+    wpred = np.exp(lwpred) * 1e9
+    # Plot the combined spectra with samples from MCMC chain
+    shifts = np.append(0,MAP_par[:K-1])
+    x1d = (x + shifts[:, None]).flatten()
+    lw1d = (lw1-lw0) * x1d + lw0
+    w1d = np.exp(lw1d) * 1e9
+    y1d = flux.flatten()
+    y1derr = flux_err.flatten()
+    specno = np.zeros((K,N),'int')
+    for k in range(K):
+        specno[k,:] = k
+    s1d = specno.flatten()
+    inds = np.argsort(x1d)
+    gp.set_parameter_vector(MAP_par[-2:])
+    gp.compute(x1d[inds], yerr = y1derr[inds])
+    fig4 = pl.figure(figsize = (16,nrange*2+1))
+    gs4 = gridspec.GridSpec(nrange,1)
+    gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.1)
+    ws = w1d.min()
+    wr = (w1d.max()-ws) / float(nrange)
+    for i in range(nrange):
+        if i == 0:
+            ax1 = pl.subplot(gs4[0,0])
+        else:
+            axc = pl.subplot(gs4[i,0], sharey=ax1)
+        if i < (nrange-1):
+            pl.setp(ax1.get_xticklabels(), visible=False)
+        wmin = ws + (i - 0.05) * wr
+        wmax = ws + (i + 1.05) * wr
+        l = (w1d >= wmin) * (w1d <= wmax)
+        for k in range(K):
+            ll = l * (s1d == k)
+            c = k % 10
+            pl.plot(w1d[ll], y1d[ll], ".C%d" % c, alpha = 0.5, ms = 8, mec='none')
+        wpred = np.linspace(wmin, wmax, 1000)
+        lwpred = np.log(wpred * 1e-9)
+        xpred = (lwpred-lw0)/(lw1-lw0)
+        isamp = np.random.randint(nsteps-nburn, size=5)
+        for j in isamp:
+            samp_params = samples_flat[j,:].flatten()
+            samp_shifts = np.append(0, samp_params[:K-1])
+            x1_samp = (x + samp_shifts[:, None]).flatten()
+            inds_samp = np.argsort(x1_samp)
+            k_samp = terms.Matern32Term(log_sigma=samp_params[-2],log_rho=samp_params[-1])
+            gp_samp = GP(k_samp, mean=1.)
+            gp_samp.compute(x1_samp[inds_samp], yerr = y1derr[inds_samp])
+            mu, _ = gp.predict(y1d[inds_samp], xpred, return_var = True)
+            pl.plot(wpred, mu, 'k-', alpha = 0.5, lw = 0.5)
+        pl.xlim(wmin, wmax)
+        pl.ylabel('flux')
+    pl.xlabel('wavelength (nm)')
+    pl.savefig('/users/suz/soft/GPSpec/plots/%s_spectra.png' % prefix)
     return par_MAP, par50, par50-par16, par84-par50
 
 if __name__ == '__main__':
     ap = ArgumentParser()
     ap.add_argument('k', type=int, help='no spectra (2 to 128)')
+    ap.add_argument('--sub', default = 1, type=int, help='subsample factor')
     ap.add_argument('--noise', default = 0, type=float, help='noise to add (%)')
     args = ap.parse_args()
     # find spectra
@@ -187,6 +189,7 @@ if __name__ == '__main__':
     spectra = np.sort(glob.glob('%s*spec.txt' % datadir))
     blaze_files = np.sort(glob.glob('%s*spec.blaze.txt' % datadir))
     K = len(spectra)
+    np.random.seed(1234)
     # select subset
     k = args.k
     print 'Using %d spectra' % k
@@ -241,11 +244,27 @@ if __name__ == '__main__':
         add_noise = np.random.randn(k,N) * add_sig
         flux += add_noise
         flux_err = np.sqrt(flux_err**2 + add_sig**2) 
+    # subsample if required. Do it at random to avoid bunches of points
+    if args.sub > 1:
+        n = int(N/args.sub)
+        ww = np.zeros((k,n))
+        ff = np.zeros((k,n))
+        ee = np.zeros((k,n))
+        indices = np.arange(N, dtype='int')
+        for i in range(k):
+            np.random.shuffle(indices)
+            ii = indices[:n]
+            ww[i,:] = wav_rest[i,ii]
+            ff[i,:] = flux[i,ii]
+            ee[i,:] = flux_err[i,ii]
+        wav_rest = np.copy(ww)
+        flux = np.copy(ff)
+        flux_err = np.copy(ee)
     # Do MCMC
-    prefix = 'HD127334_%03d_%03d' % (k, int(args.noise))
+    prefix = 'HD127334_%03d_%03d_%03d' % (k, args.noise, args.sub)
     t0 = clock()
     res = do_MCMC(wav_rest, flux, flux_err, \
-                      nsteps = 2000, prefix = prefix)
+                      nsteps = 2000, prefix = prefix, nrange=0)
     t1 = clock()
     print 'Time taken: %ds.' % int(t1-t0)
     # Save results for this run
@@ -259,7 +278,7 @@ if __name__ == '__main__':
     t = int(t1-t0)
     rms = np.sqrt(np.mean(res[1][:-2]**2))
     err = np.median(0.5*(res[2][:-2]+res[3][:-2]))
-    str = '%d %d %d %.3f %.3f\n' % (k, int(args.noise*100), t, rms, err)
+    str = '%d %d %d %d %.3f %.3f\n' % (k, args.noise, args.sub, t, rms, err)
     print str
     f = open('/users/suz/soft/GPSpec/data/HD127334_N.dat','aw')
     f.write(str)

@@ -26,23 +26,27 @@ def fitspec(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1'):
     lwav = np.log(wav * 1e-9) # in m
     lw0, lw1 = lwav.min(), lwav.max()
     x = (lwav - lw0) / (lw1 - lw0)
+    x = np.copy(lwav)
     # First do GP fit to one spectrum to get estimate of GP HPs
     i = np.random.randint(K)
     xx = x[i,:].flatten()
     yy = flux[i,:].flatten()
     ee = flux_err[i,:].flatten()
     xp = np.linspace(xx.min(), xx.max(), 100)
-    HPs, _, _ = u.Fit0(xx, yy, ee, verbose = False, xpred = xp)
+    print xx
+    HPs, _, _ = u.Fit0(xx, yy, ee, verbose = False, xpred = xp, HP_init=np.array([-1.4,-9.03]))
     print 'Initial GP HPs:', HPs
     # Initial (ML) estimate of parameters
     print "Starting ML fit"
     par_in = np.zeros(K+1)
     par_in[-2:] = HPs
     ML_par = np.array(u.Fit1(x, flux, flux_err, verbose = False, par_in = par_in))
+    print ML_par
     par_ML = np.copy(ML_par)
     par_ML[:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT
-    par_ML[-1] *= (lw1 - lw0)
     print "ML fit done"
+    return par_ML
+
     # MCMC
     print "Starting MCMC"
     ndim = K+1
@@ -66,10 +70,8 @@ def fitspec(wav, flux, flux_err, nsteps = 2000, nrange = 3, prefix = 'RR1'):
     # convert chains back to physical units: shifts in km/s
     samples_tpl = np.copy(samples)
     samples_tpl[:,:,:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT
-    samples_tpl[:,:,-1] *= (lw1 - lw0)
     par_MAP = np.copy(MAP_par)
     par_MAP[:K-1] *= (lw1 - lw0) * SPEED_OF_LIGHT
-    par_MAP[-1] *= (lw1 - lw0)
     # parameter names for plots
     labels = []
     for i in range(K-1):
@@ -150,22 +152,22 @@ while k <= K:
     res = fitspec(wav_rest[ii,:], flux[ii,:], flux_err[ii,:], nsteps = 2000, prefix = 'RR1_%03d' % k)
     t1 = clock()
     ts.append(t1-t0)
-    X = np.zeros((4,len(res[0])))
-    X[0] = res[0]
-    X[1] = res[1]
-    X[2] = res[2]
-    X[3] = res[3]
-    np.savetxt('../data/test_RR1_%03d.dat' % k, X.T)
-    print 'Time taken: %ds.' % int(ts[-1])
-    meds.append(np.median(abs(res[1][:-2])))
-    print 'Median absolute error: ', meds[-1]
-    sigs.append(np.median(0.5*(res[2][:-2]+res[3][:-2])))
-    print 'Median uncertainty: ', sigs[-1]
-    k += 1
-    X = np.zeros((4,len(ks)))
-    X[0] = ks
-    X[1] = ts
-    X[2] = meds
-    X[3] = sigs
-    np.savetxt('../data/test_RR1_N.dat', X.T)
+    # X = np.zeros((4,len(res[0])))
+    # X[0] = res[0]
+    # X[1] = res[1]
+    # X[2] = res[2]
+    # X[3] = res[3]
+    # np.savetxt('../data/test_RR1_%03d.dat' % k, X.T)
+    # print 'Time taken: %ds.' % int(ts[-1])
+    # meds.append(np.median(abs(res[1][:-2])))
+    # print 'Median absolute error: ', meds[-1]
+    # sigs.append(np.median(0.5*(res[2][:-2]+res[3][:-2])))
+    # print 'Median uncertainty: ', sigs[-1]
+    # k += 1
+    # X = np.zeros((4,len(ks)))
+    # X[0] = ks
+    # X[1] = ts
+    # X[2] = meds
+    # X[3] = sigs
+    # np.savetxt('../data/test_RR1_N.dat', X.T)
     raw_input('Next k?')
