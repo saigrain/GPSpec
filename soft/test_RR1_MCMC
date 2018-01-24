@@ -11,13 +11,10 @@ from argparse import ArgumentParser
 
 SPEED_OF_LIGHT = 2.99796458e8 # in m.s
 
-# ln(sig)             :   -1.27044   -1.25297 - 0.11071 + 0.09352
-# ln(rho) (m)         :   -4.93445   -4.92748 - 0.08200 + 0.06569
-
-ln_sig_med = -1.24
-ln_sig_err = 0.08 * 2
-ln_rho_med = -4.92
-ln_rho_err = 0.06 * 2
+ln_sig_med = -1.65
+ln_sig_err = 0.06 * 2
+ln_rho_med = -5.49
+ln_rho_err = 0.04 * 2
 
 def log_prior(p):
     lp = 0.0
@@ -30,7 +27,7 @@ def log_prior(p):
 def log_posterior(p, gp, x2d, y2d, y2derr):
     return log_prior(p) + u.LP1(p, gp, x2d, y2d, y2derr)
 
-def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 'RR1',nrange=5):
+def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 's5', nrange = 10):
     K, N = wav.shape
     lwav = np.log(wav * 1e-9) # in m
     lw0, lw1 = lwav.min(), lwav.max()
@@ -101,7 +98,7 @@ def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 'RR1',nrange=5):
     nburn = int(0.25*nsteps)
     for ax in axs:
         ax.axvline(nburn)
-    pl.savefig('/users/suz/soft/GPSpec/plots/%s_chains.png' % prefix)
+    pl.savefig('/Users/aigrain/Soft/GPSpec/plots/%s_chains.png' % prefix)
     # Evaluate and print the parameter ranges
     print '\n{:20s}: {:10s} {:10s} {:10s} - {:7s} + {:7s}'.format('Parameter', 'ML', 'MAP', \
                                                                     'Median','Error','Error')
@@ -109,7 +106,7 @@ def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 'RR1',nrange=5):
     par84 = np.zeros(ndim)
     par16 = np.zeros(ndim)
     for i in range(ndim):
-        sam = samples_tpl[:,:,i].flatten()
+        sam = samples_tpl[:,nburn:,i].flatten()
         b, m, f = np.percentile(sam, [16,50,84])
         par50[i] = m
         par16[i] = b
@@ -120,87 +117,88 @@ def do_MCMC(wav, flux, flux_err, nsteps = 2000, prefix = 'RR1',nrange=5):
     # Plot the parameter distributions
     fig2 = corner.corner(samples_tpl_flat, truths = par_MAP, labels = labels, show_titles = True, \
                             quantiles = [0.16, 0.84])
-    pl.savefig('/users/suz/soft/GPSpec/plots/%s_corner.png' % prefix)
-    # Plot the individual spectra with MAP fit
-    xpred, fpred, fpred_err = u.Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
-    lwpred = (lw1-lw0) * xpred + lw0
-    wpred = np.exp(lwpred) * 1e9
-    fig3 = pl.figure(figsize = (12,K+1))
-    gs3 = gridspec.GridSpec(K,1)
-    gs3.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
-    for i in range(K):
-        if i == 0:
-            ax1 = pl.subplot(gs3[0,0])
-        else:
-            axc = pl.subplot(gs3[i,0], sharex=ax1, sharey=ax1)
-        if i < (K-1):
-            pl.setp(ax1.get_xticklabels(), visible=False)
-        pl.errorbar(wav[i,:], flux[i,:], yerr = flux_err[i,:], \
-                         fmt = ".k", ms = 2, mec = 'none', capsize = 0, alpha = 0.5)
-        pl.plot(wpred[i,:], fpred[i,:], 'C0')
-        pl.fill_between(wpred[i,:], fpred[i,:] + 2 * fpred_err[i,:], \
-                             fpred[i,:] - fpred_err[i,:], color = 'C0', alpha = 0.4, lw = 0)
-        pl.ylabel('spec. %d' % (i+1))
-    pl.xlim(wav.min(), wav.max())
-    pl.xlabel('wavelength (nm)')
-    pl.savefig('/users/suz/soft/GPSpec/plots/%s_spectra.png' % prefix)
-    # Plot the combined spectra with samples from MCMC chain
-    shifts = np.append(0,MAP_par[:K-1])
-    x1d = (x + shifts[:, None]).flatten()
-    lw1d = (lw1-lw0) * x1d + lw0
-    w1d = np.exp(lw1d) * 1e9
-    y1d = flux.flatten()
-    y1derr = flux_err.flatten()
-    inds = np.argsort(x1d)
-    gp.set_parameter_vector(MAP_par[-2:])
-    gp.compute(x1d[inds], yerr = y1derr[inds])
-    fig4 = pl.figure(figsize = (12,nrange+1))
-    gs4 = gridspec.GridSpec(nrange,1)
-    gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.05)
-    ws = w1d.min()
-    wr = (w1d.max()-ws) / float(nrange)
-    for i in range(nrange):
-        if i == 0:
-            ax1 = pl.subplot(gs4[0,0])
-        else:
-            axc = pl.subplot(gs4[i,0], sharey=ax1)
-        if i < (nrange-1):
-            pl.setp(ax1.get_xticklabels(), visible=False)
-        wmin = ws + (i - 0.05) * wr
-        wmax = ws + (i + 1.05) * wr
-        l = (w1d >= wmin) * (w1d <= wmax)
-        pl.errorbar(w1d[l], y1d[l], yerr = y1derr[l], fmt = ".k", capsize = 0, \
-                         alpha = 0.5, ms = 2, mec='none')
-        wpred = np.linspace(wmin, wmax, 1000)
-        lwpred = np.log(wpred * 1e-9)
-        xpred = (lwpred-lw0)/(lw1-lw0)
-        isamp = np.random.randint(nsteps-nburn, size=10)
-        for j in isamp:
-            samp_params = samples_flat[j,:].flatten()
-            samp_shifts = np.append(0, samp_params[:K-1])
-            x1_samp = (x + samp_shifts[:, None]).flatten()
-            inds_samp = np.argsort(x1_samp)
-            k_samp = terms.Matern32Term(log_sigma=samp_params[-2],log_rho=samp_params[-1])
-            gp_samp = GP(k_samp, mean=1.)
-            gp_samp.compute(x1_samp[inds_samp], yerr = y1derr[inds_samp])
-            mu, _ = gp.predict(y1d[inds_samp], xpred, return_var = True)
-            pl.plot(wpred, mu, 'C0-', lw = 0.5, alpha = 0.5)
-        pl.xlim(wmin, wmax)
-        pl.ylabel('flux')
-    pl.xlabel('wavelength (nm)')
-    pl.savefig('/users/suz/soft/GPSpec/plots/%s_combined.png' % prefix)
+    pl.savefig('/Users/aigrain/Soft/GPSpec/plots/%s_corner.png' % prefix)
+    # # Plot the individual spectra with MAP fit
+    # xpred, fpred, fpred_err = u.Pred1_2D(MAP_par, x, flux, flux_err, doPlot = False)
+    # lwpred = (lw1-lw0) * xpred + lw0
+    # wpred = np.exp(lwpred) * 1e9
+    # fig3 = pl.figure(figsize = (12,K+1))
+    # gs3 = gridspec.GridSpec(K,1)
+    # gs3.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0)
+    # for i in range(K):
+    #     if i == 0:
+    #         ax1 = pl.subplot(gs3[0,0])
+    #     else:
+    #         axc = pl.subplot(gs3[i,0], sharex=ax1, sharey=ax1)
+    #     if i < (K-1):
+    #         pl.setp(ax1.get_xticklabels(), visible=False)
+    #     pl.errorbar(wav[i,:], flux[i,:], yerr = flux_err[i,:], \
+    #                      fmt = ".k", ms = 2, mec = 'none', capsize = 0, alpha = 0.5)
+    #     pl.plot(wpred[i,:], fpred[i,:], 'C0')
+    #     pl.fill_between(wpred[i,:], fpred[i,:] + 2 * fpred_err[i,:], \
+    #                          fpred[i,:] - fpred_err[i,:], color = 'C0', alpha = 0.4, lw = 0)
+    #     pl.ylabel('spec. %d' % (i+1))
+    # pl.xlim(wav.min(), wav.max())
+    # pl.xlabel('wavelength (nm)')
+    # pl.savefig('/Users/aigrain/Soft/GPSpec/plots/%s_spectra.png' % prefix)
+    # # Plot the combined spectra with samples from MCMC chain
+    # shifts = np.append(0,MAP_par[:K-1])
+    # x1d = (x + shifts[:, None]).flatten()
+    # lw1d = (lw1-lw0) * x1d + lw0
+    # w1d = np.exp(lw1d) * 1e9
+    # y1d = flux.flatten()
+    # y1derr = flux_err.flatten()
+    # inds = np.argsort(x1d)
+    # gp.set_parameter_vector(MAP_par[-2:])
+    # gp.compute(x1d[inds], yerr = y1derr[inds])
+    # fig4 = pl.figure(figsize = (12,nrange+1))
+    # gs4 = gridspec.GridSpec(nrange,1)
+    # gs4.update(left=0.1, right=0.98, bottom = 0.07, top = 0.98, hspace=0.05)
+    # ws = w1d.min()
+    # wr = (w1d.max()-ws) / float(nrange)
+    # for i in range(nrange):
+    #     if i == 0:
+    #         ax1 = pl.subplot(gs4[0,0])
+    #     else:
+    #         axc = pl.subplot(gs4[i,0], sharey=ax1)
+    #     if i < (nrange-1):
+    #         pl.setp(ax1.get_xticklabels(), visible=False)
+    #     wmin = ws + (i - 0.05) * wr
+    #     wmax = ws + (i + 1.05) * wr
+    #     l = (w1d >= wmin) * (w1d <= wmax)
+    #     pl.errorbar(w1d[l], y1d[l], yerr = y1derr[l], fmt = ".k", capsize = 0, \
+    #                      alpha = 0.5, ms = 2, mec='none')
+    #     wpred = np.linspace(wmin, wmax, 1000)
+    #     lwpred = np.log(wpred * 1e-9)
+    #     xpred = (lwpred-lw0)/(lw1-lw0)
+    #     isamp = np.random.randint(nsteps-nburn, size=10)
+    #     for j in isamp:
+    #         samp_params = samples_flat[j,:].flatten()
+    #         samp_shifts = np.append(0, samp_params[:K-1])
+    #         x1_samp = (x + samp_shifts[:, None]).flatten()
+    #         inds_samp = np.argsort(x1_samp)
+    #         k_samp = terms.Matern32Term(log_sigma=samp_params[-2],log_rho=samp_params[-1])
+    #         gp_samp = GP(k_samp, mean=1.)
+    #         gp_samp.compute(x1_samp[inds_samp], yerr = y1derr[inds_samp])
+    #         mu, _ = gp.predict(y1d[inds_samp], xpred, return_var = True)
+    #         pl.plot(wpred, mu, 'C0-', lw = 0.5, alpha = 0.5)
+    #     pl.xlim(wmin, wmax)
+    #     pl.ylabel('flux')
+    # pl.xlabel('wavelength (nm)')
+    # pl.savefig('/Users/aigrain/Soft/GPSpec/plots/%s_combined.png' % prefix)
 
     return par_MAP, par50, par50-par16, par84-par50
 
 if __name__ == '__main__':
     ap = ArgumentParser()
-    ap.add_argument('snr', type=float, help='SNR (300, 30 or 10)')
+    ap.add_argument('snr', type=float, help='SNR (300, 100, 30 or 10)')
     ap.add_argument('k', type=int, help='no spectra (2 to 128)')
     args = ap.parse_args()
+
     # Load dataset
     SNR = args.snr
     print 'SNR = %d' % SNR
-    d = siom.loadmat('/users/suz/soft/GPSpec/data/synth_dataset_004_%04d.mat' % SNR)
+    d = siom.loadmat('/Users/aigrain/Soft/GPSpec/data/synth_dataset_005_%04d.mat' % SNR)
     wav = d['wavelength']
     K, N = wav.shape
     flux = d['flux']
@@ -220,7 +218,7 @@ if __name__ == '__main__':
     print 'Using spectra: ', ii
 
     # Do MCMC
-    prefix = 'synth4_%04d_%03d' % (SNR, k)
+    prefix = 'synth5_%04d_%03d' % (SNR, k)
     t0 = clock()
     res = do_MCMC(wav_rest[ii,:], flux[ii,:], flux_err[ii,:], \
                       nsteps = 2000, prefix = prefix)
@@ -233,13 +231,17 @@ if __name__ == '__main__':
     X[1] = res[1]
     X[2] = res[2]
     X[3] = res[3]
-    np.savetxt('/users/suz/soft/GPSpec/data/%s.dat' % prefix, X.T)
+    np.savetxt('/Users/aigrain/Soft/GPSpec/data/%s.dat' % prefix, X.T)
     
     t = int(t1-t0)
-    rms = np.sqrt(np.mean(res[1][:-2]**2))
+    print res[1][:-2]
+    v = res[1][:-2]
+    mean = np.mean(v)
+    dv = v - mean
+    rms = np.sqrt(np.mean(dv**2))
     err = np.median(0.5*(res[2][:-2]+res[3][:-2]))
     str = '%d %d %d %.3f %.3f\n' % (SNR, k, t, rms, err)
     print str
-    f = open('/users/suz/soft/GPSpec/data/synth4_N.dat','aw')
+    f = open('/Users/aigrain/Soft/GPSpec/data/synth5_N.dat','aw')
     f.write(str)
     f.close()
